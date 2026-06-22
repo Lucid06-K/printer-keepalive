@@ -101,9 +101,11 @@ went through:
 lpstat -p "THEIR_PRINTER_NAME"     # should return to "is idle"
 "$PKEEP" log                       # should show one entry
 ```
-Ask the user to check the output tray: they should see 4 thin vertical lines —
-cyan, magenta, yellow, black. If lines are broken/faint, the printer already has
-some clogging and the user should run its built-in cleaning once.
+Ask the user to check the output tray: they should see a CMYK test strip across
+the top (cyan, magenta, yellow, black bars) with an ink-level gauge on the
+divider below it, then a mostly-blank page (or note paper if enabled). If any of
+the colour bars are broken/faint/missing, that channel is partly clogged and the
+user should run the printer's built-in cleaning once.
 
 ## Step 5 — verify notification (optional)
 

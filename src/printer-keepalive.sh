@@ -173,7 +173,7 @@ IPPEOF
             printf "separate %s %s %s %s", (c==""?"-":c),(m==""?"-":m),(y==""?"-":y),(k==""?"-":k);
         }
     }')
-    printf '%s\n' "$mapped" > "$cf" 2>/dev/null   # cache the fresh reading
+    printf '%s\n' "$mapped" > "$cf" 2>/dev/null || true   # cache the fresh reading
     printf '%s\n' "$mapped"
 }
 
@@ -223,8 +223,6 @@ def esc(s):
 def text(x, y, size, k, s, font="F1", tc=0.0):
     return (f"BT /{font} {size} Tf 0 0 0 {k} k {tc} Tc "
             f"{x:.1f} {y:.1f} Td ({esc(s)}) Tj 0 Tc ET")
-def rtext(xr, y, size, k, s, font="F1"):   # right-aligned at xr (approx Helvetica width)
-    return text(xr - len(s) * size * 0.5, y, size, k, s, font)
 def ctext(xc, y, size, k, s, font="F1"):   # centred on xc (approx Helvetica width)
     return text(xc - len(s) * size * 0.25, y, size, k, s, font)
 def rect(x, y, w, h, c, m, ye, k):
