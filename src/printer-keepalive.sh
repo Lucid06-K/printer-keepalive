@@ -151,7 +151,14 @@ inks = [(1, 0, 0, 0, "C"), (0, 1, 0, 0, "M"), (0, 0, 1, 0, "Y"), (0, 0, 0, 1, "K
 # per-tier strip geometry: bar height + gap. Heavier = more ink (deeper flush).
 BH, GAP = {"light": (8, 6), "medium": (14, 6), "heavy": (24, 7)}[tier]
 
+# the page content is encoded latin-1, so fold common smart punctuation to ASCII
+# (macOS computer names default to a curly apostrophe) and replace anything else
+# that can't be encoded, so a stray Unicode char never crashes the generator.
 def esc(s):
+    for a, b in (("’", "'"), ("‘", "'"), ("“", '"'), ("”", '"'),
+                 ("–", "-"), ("—", "-"), ("…", "...")):
+        s = s.replace(a, b)
+    s = s.encode("latin-1", "replace").decode("latin-1")
     return s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 def text(x, y, size, k, s, font="F1", tc=0.0):
     return (f"BT /{font} {size} Tf 0 0 0 {k} k {tc} Tc "
