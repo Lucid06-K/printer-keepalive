@@ -118,17 +118,53 @@ decide_tier() {
     else echo heavy; fi
 }
 
+# ink levels for a printer, as a compact "Color 50%  ·  Black 40%" string (only
+# real ink cartridges; skips the waste/maintenance tank). Empty if the printer
+# doesn't report marker levels via CUPS. Reads localhost CUPS (cached), so it's
+# fast and works even if the printer is momentarily offline.
+ink_report() {
+    local p="$1" tf out names levels types sock=/private/var/run/cupsd
+    command -v ipptool >/dev/null 2>&1 || { echo ""; return 0; }
+    [ -n "$p" ] || { echo ""; return 0; }
+    [ -S "$sock" ] || sock=/var/run/cupsd
+    tf=$(mktemp)
+    cat > "$tf" <<'IPPEOF'
+{
+  OPERATION Get-Printer-Attributes
+  GROUP operation-attributes-tag
+  ATTR charset attributes-charset utf-8
+  ATTR naturalLanguage attributes-natural-language en
+  ATTR uri printer-uri $uri
+  ATTR keyword requested-attributes marker-names,marker-levels,marker-types
+}
+IPPEOF
+    # query the local CUPS via its domain socket (always reachable; cupsd may not
+    # be listening on TCP localhost:631 when idle). Falls back gracefully to empty.
+    out=$(CUPS_SERVER="$sock" ipptool -tv "ipp://localhost/printers/$p" "$tf" 2>/dev/null || true)
+    rm -f "$tf"
+    names=$(printf '%s\n' "$out"  | sed -n 's/.*marker-names[^=]*= //p'  | head -1)
+    levels=$(printf '%s\n' "$out" | sed -n 's/.*marker-levels[^=]*= //p' | head -1)
+    types=$(printf '%s\n' "$out"  | sed -n 's/.*marker-types[^=]*= //p'  | head -1)
+    [ -z "$levels" ] && { echo ""; return 0; }
+    awk -v n="$names" -v l="$levels" -v t="$types" 'BEGIN{
+        ni=split(n,N,","); split(l,L,","); split(t,T,",");
+        o="";
+        for(i=1;i<=ni;i++) if(T[i] ~ /ink-cartridge/) o=o (o==""?"":"  -  ") N[i] " " L[i] "%";
+        print o
+    }'
+}
+
 # --- build the keep-alive PDF for a given tier -----------------------------
-# build_pdf <tier> <subtitle>  -> echoes the temp PDF path
+# build_pdf <tier> <subtitle> [ink]  -> echoes the temp PDF path
 # The test strip (all ink channels) runs across the top of the page so the area
 # below is free; with ruled-paper mode on, that area becomes lined note paper.
 build_pdf() {
-    local tier="$1" subtitle="$2" pdf stub style sp_mm sp_pts
+    local tier="$1" subtitle="$2" ink="${3:-}" pdf stub style sp_mm sp_pts
     stub="$(mktemp -t pkeepalive)"; pdf="${stub}.pdf"; mv "$stub" "$pdf"
     [ -z "$PYTHON" ] && { rm -f "$pdf"; echo "ERROR: python3 not found" >&2; return 1; }
     style=$(get_notestyle); sp_mm=$(get_notespacing)
     sp_pts=$(awk "BEGIN{printf \"%.2f\", $sp_mm * 72 / 25.4}")   # mm -> points
-    "$PYTHON" - "$pdf" "$tier" "$style" "$sp_pts" "$subtitle" <<'PY'
+    "$PYTHON" - "$pdf" "$tier" "$style" "$sp_pts" "$subtitle" "$ink" <<'PY'
 import sys
 out  = sys.argv[1]
 tier = sys.argv[2] if len(sys.argv) > 2 else "light"
@@ -136,6 +172,7 @@ style = sys.argv[3] if len(sys.argv) > 3 else "off"
 try: spacing = float(sys.argv[4])
 except (IndexError, ValueError): spacing = 22.7
 subtitle = sys.argv[5] if len(sys.argv) > 5 else ""
+ink = sys.argv[6] if len(sys.argv) > 6 else ""
 if tier not in ("light", "medium", "heavy"): tier = "light"
 if style not in ("lines", "grid", "dots"): style = "off"
 if spacing < 8: spacing = 8        # sane floor so we never emit thousands of rules
@@ -163,6 +200,8 @@ def esc(s):
 def text(x, y, size, k, s, font="F1", tc=0.0):
     return (f"BT /{font} {size} Tf 0 0 0 {k} k {tc} Tc "
             f"{x:.1f} {y:.1f} Td ({esc(s)}) Tj 0 Tc ET")
+def rtext(xr, y, size, k, s, font="F1"):   # right-aligned at xr (approx Helvetica width)
+    return text(xr - len(s) * size * 0.5, y, size, k, s, font)
 def rect(x, y, w, h, c, m, ye, k):
     return f"{c} {m} {ye} {k} k {x:.1f} {y:.1f} {w:.1f} {h:.1f} re f"
 def line(x1, y1, x2, y2, w, c, m, ye, k):
@@ -174,6 +213,11 @@ ops.append(text(ML, 802, 13, 0.82, "PRINTER DON'T DIE PLEASE!!", font="F2", tc=1
 sub = subtitle.strip()
 sub = (sub + "  -  " if sub else "") + f"{tier} flush"
 ops.append(text(ML, 788, 8, 0.45, sub))
+# ink report, top-right above the strip, on the title's line (only if the
+# printer reported levels). "Ink" label in bold, the levels in muted grey.
+if ink:
+    ops.append(rtext(RIGHT, 802, 8, 0.4, ink))
+    ops.append(rtext(RIGHT - len(ink) * 8 * 0.5 - 6, 802, 7, 0.5, "INK", font="F2"))
 
 # colour strip across the short side, just below the header
 y = 768
@@ -288,7 +332,7 @@ esac
 
 # --- dry run: build + open, no printing, no state change -------------------
 if [ "$DRY" = 1 ]; then
-    PDF=$(build_pdf "$TIER" "$TS  ·  $since  ·  $HOST  ·  dry run")
+    PDF=$(build_pdf "$TIER" "$TS  ·  $since  ·  $HOST  ·  dry run" "$(ink_report "${PRINTERS[0]:-}")")
     echo "[$TS] dry run ($TIER) - $PDF" | tee -a "$LOG"
     open "$PDF" 2>/dev/null || true
     exit 0
@@ -309,7 +353,7 @@ NOW=$(date +%s); OK=0; FAILED=""
 
 # print to every selected printer; one history row per printer
 for P in "${PRINTERS[@]}"; do
-    PDF=$(build_pdf "$TIER" "$TS  ·  $since  ·  $HOST  ·  $P")
+    PDF=$(build_pdf "$TIER" "$TS  ·  $since  ·  $HOST  ·  $P" "$(ink_report "$P")")
     if lp -d "$P" -n "$COPIES" -o media=A4 "$PDF" >/dev/null 2>>"$LOG"; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$NOW" "$TS" "$TIER" "$DAYS" "$COPIES" "$P" >> "$HISTORY_FILE"
         OK=$((OK+1))
