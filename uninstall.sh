@@ -31,7 +31,7 @@ for RC in "$HOME/.zshrc" "$HOME/.bashrc"; do
 done
 
 if [ "$PURGE" = 1 ]; then
-    rm -f "$SCRIPTS"/printer_keepalive.* \
+    rm -f "$SCRIPTS"/printer_keepalive.* "$SCRIPTS"/.printer_keepalive.* \
           "$HOME/Library/Logs/printer-keepalive.log" \
           "$HOME/Library/Logs/printer-keepalive.out.log" \
           "$HOME/Library/Logs/printer-keepalive.err.log"

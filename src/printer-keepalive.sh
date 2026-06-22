@@ -118,15 +118,16 @@ decide_tier() {
     else echo heavy; fi
 }
 
-# ink levels for a printer, as a compact "Color 50%  ·  Black 40%" string (only
-# real ink cartridges; skips the waste/maintenance tank). Empty if the printer
-# doesn't report marker levels via CUPS. Reads localhost CUPS (cached), so it's
-# fast and works even if the printer is momentarily offline.
+# ink levels for a printer as a "C M Y K" string of percentages ("-" = unknown).
+# CUPS only reports marker levels while the printer is awake/recently contacted,
+# so we cache the last good reading per printer and fall back to it when a cold
+# query comes back empty (a scheduled run often starts with the printer asleep).
 ink_report() {
-    local p="$1" tf out names levels types sock=/private/var/run/cupsd
+    local p="$1" tf out names levels types mapped cf sock=/private/var/run/cupsd
     command -v ipptool >/dev/null 2>&1 || { echo ""; return 0; }
     [ -n "$p" ] || { echo ""; return 0; }
     [ -S "$sock" ] || sock=/var/run/cupsd
+    cf="$SCRIPTS/.printer_keepalive.ink.$(printf '%s' "$p" | tr -c 'A-Za-z0-9_-' '_')"
     tf=$(mktemp)
     cat > "$tf" <<'IPPEOF'
 {
@@ -145,13 +146,29 @@ IPPEOF
     names=$(printf '%s\n' "$out"  | sed -n 's/.*marker-names[^=]*= //p'  | head -1)
     levels=$(printf '%s\n' "$out" | sed -n 's/.*marker-levels[^=]*= //p' | head -1)
     types=$(printf '%s\n' "$out"  | sed -n 's/.*marker-types[^=]*= //p'  | head -1)
-    [ -z "$levels" ] && { echo ""; return 0; }
-    awk -v n="$names" -v l="$levels" -v t="$types" 'BEGIN{
+    if [ -z "$levels" ]; then            # cold query — fall back to last cached reading
+        [ -r "$cf" ] && cat "$cf" || echo ""
+        return 0
+    fi
+    # map levels onto the 4 channels "C M Y K". Separate cartridges map directly;
+    # a single combined colour cartridge fills C/M/Y; "-" where unknown.
+    mapped=$(awk -v n="$names" -v l="$levels" -v t="$types" 'BEGIN{
         ni=split(n,N,","); split(l,L,","); split(t,T,",");
-        o="";
-        for(i=1;i<=ni;i++) if(T[i] ~ /ink-cartridge/) o=o (o==""?"":"  -  ") N[i] " " L[i] "%";
-        print o
-    }'
+        color=""; c=""; m=""; y=""; k="";
+        for(i=1;i<=ni;i++){
+            if(T[i] !~ /ink-cartridge/) continue;
+            nm=tolower(N[i]); lv=L[i];
+            if(nm ~ /black|pgbk|^bk$|^k$/)      k=lv;
+            else if(nm ~ /cyan|^c$/)            c=lv;
+            else if(nm ~ /magenta|^m$/)         m=lv;
+            else if(nm ~ /yellow|^y$/)          y=lv;
+            else                                color=lv;   # combined "Color"/tri-colour
+        }
+        if(c=="") c=color; if(m=="") m=color; if(y=="") y=color;
+        printf "%s %s %s %s", (c==""?"-":c),(m==""?"-":m),(y==""?"-":y),(k==""?"-":k);
+    }')
+    printf '%s\n' "$mapped" > "$cf" 2>/dev/null   # cache the fresh reading
+    printf '%s\n' "$mapped"
 }
 
 # --- build the keep-alive PDF for a given tier -----------------------------
@@ -202,6 +219,8 @@ def text(x, y, size, k, s, font="F1", tc=0.0):
             f"{x:.1f} {y:.1f} Td ({esc(s)}) Tj 0 Tc ET")
 def rtext(xr, y, size, k, s, font="F1"):   # right-aligned at xr (approx Helvetica width)
     return text(xr - len(s) * size * 0.5, y, size, k, s, font)
+def ctext(xc, y, size, k, s, font="F1"):   # centred on xc (approx Helvetica width)
+    return text(xc - len(s) * size * 0.25, y, size, k, s, font)
 def rect(x, y, w, h, c, m, ye, k):
     return f"{c} {m} {ye} {k} k {x:.1f} {y:.1f} {w:.1f} {h:.1f} re f"
 def line(x1, y1, x2, y2, w, c, m, ye, k):
@@ -213,11 +232,8 @@ ops.append(text(ML, 802, 13, 0.82, "PRINTER DON'T DIE PLEASE!!", font="F2", tc=1
 sub = subtitle.strip()
 sub = (sub + "  -  " if sub else "") + f"{tier} flush"
 ops.append(text(ML, 788, 8, 0.45, sub))
-# ink report, top-right above the strip, on the title's line (only if the
-# printer reported levels). "Ink" label in bold, the levels in muted grey.
-if ink:
-    ops.append(rtext(RIGHT, 802, 8, 0.4, ink))
-    ops.append(rtext(RIGHT - len(ink) * 8 * 0.5 - 6, 802, 7, 0.5, "INK", font="F2"))
+# ink levels (per channel "C M Y K") are drawn on the divider below.
+ink_levels = ink.split() if ink else []
 
 # colour strip across the short side, just below the header
 y = 768
@@ -229,11 +245,16 @@ for c, m, ye, k, label in inks:
     y = strip_bottom - GAP
 
 # divider between the test strip and the space below: one rule split into four
-# equal quarters coloured C, M, Y, K (a little echo of the strip above)
+# equal C/M/Y/K quarters, doubling as the ink gauge — each channel's % is printed
+# above its quarter (same value across C/M/Y for a combined colour cartridge).
 rule_y = strip_bottom - 16
 qw = CW / 4.0
 for i, (c, m, ye, k) in enumerate([(1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1)]):
     ops.append(line(ML + i*qw, rule_y, ML + (i+1)*qw, rule_y, 1.5, c, m, ye, k))
+    if i < len(ink_levels) and ink_levels[i] not in ("", "-"):
+        ops.append(ctext(ML + (i + 0.5) * qw, rule_y + 4, 6.5, 0.55, ink_levels[i] + "%"))
+if ink_levels:
+    ops.append(text(RIGHT + 6, rule_y - 2, 6, 0.45, "ink"))
 
 # note paper below (optional): lines / grid / dots, edge to edge, down to the
 # bottom of the page (the printer's own unprintable margin trims the extremes).
@@ -360,6 +381,9 @@ for P in "${PRINTERS[@]}"; do
     if lp -d "$P" -n "$COPIES" -o media=A4 "$PDF" >/dev/null 2>>"$LOG"; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$NOW" "$TS" "$TIER" "$DAYS" "$COPIES" "$P" >> "$HISTORY_FILE"
         OK=$((OK+1))
+        # the job just woke the printer, so CUPS now has fresh marker levels —
+        # refresh the cache so the NEXT page shows current ink
+        ink_report "$P" >/dev/null 2>&1 || true
     else
         echo "[$TS] FAILED to print to $P (see log)" | tee -a "$LOG" >&2
         FAILED="$FAILED $P"
