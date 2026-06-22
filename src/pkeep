@@ -60,7 +60,7 @@ REPO_RAW="https://raw.githubusercontent.com/Lucid06-K/printer-keepalive/main"
 
 DEFAULT_INTERVAL=1209600
 DEFAULT_LEAD=8
-VERSION="1.10.0"
+VERSION="1.10.1"
 
 # Public key for verifying the update manifest's signature. The matching private
 # key is held OFFLINE by the maintainer (see SIGNING.md) and is never in the repo.
@@ -81,10 +81,7 @@ Lj8KV3AbURsbzg/soOTa+Qqw8xK7+wPu7Ucj0DI9SuX5AgMBAAE=
 -----END PUBLIC KEY-----"
 
 R=$'\033[0m'; REV=$'\033[7m'; DIM=$'\033[2m'; GRN=$'\033[32m'; BLD=$'\033[1m'
-# CMYK-themed accents (on-brand for the colour strip the tool prints)
-CYN=$'\033[36m'; MAG=$'\033[35m'; YEL=$'\033[33m'; REDC=$'\033[31m'; BLU=$'\033[34m'
-# title with each word tinted like the C/M/Y/K strip
-TITLE="${BLD}${CYN}Printer ${MAG}Don't ${YEL}Die ${GRN}Please!!${R}"
+TITLE="${BLD}Printer Don't Die Please!!${R}"
 
 # --- state readers (mirror the worker) -------------------------------------
 trim() { tr -d ' \t\n\r'; }
@@ -293,22 +290,20 @@ _paint() {
 }
 draw() { _paint "$(_draw_body)"; }
 
-row() {  # row <index> <text> [colour] ; focused row = colour-tinted reverse bar
-    local i="$1" text="$2" col="${3:-}"
-    if [ "$i" -eq "$focus" ]; then printf '  %s%s ▸ %-44s%s\n' "$col" "$REV" "$text" "$R"
-    else printf '     %s%s%s\n' "$col" "$text" "$R"; fi
+row() {  # row <index> <plain-when-unfocused> ; focused row is reverse-video
+    local i="$1" text="$2"
+    if [ "$i" -eq "$focus" ]; then printf '  %s ▸ %-44s%s\n' "$REV" "$text" "$R"
+    else printf '     %s\n' "$text"; fi
 }
 
 _draw_body() {
     local SEP="${DIM}──────────────────────────────────────────────────${R}"
-    # a CMYK-tinted rule for under the title (echoes the printed colour strip)
-    local CSEP="${CYN}────────────${MAG}─────────────${YEL}────────────${GRN}─────────────${R}"
     local agent printer; printer=$(printers_summary)
-    is_loaded && agent="${GRN}● ON${R}" || agent="${REDC}○ OFF${R}"
+    is_loaded && agent="${GRN}● ON${R}" || agent="${DIM}○ OFF${R}"
 
     if [ "$SCREEN" = notepaper ]; then
         printf '\n  %s %s\n' "${TITLE}" "${DIM}· Note paper${R}"
-        printf '  %s\n' "$CSEP"
+        printf '  %s\n' "$SEP"
         row 0 "Style              $(get_notestyle)"
         row 1 "$(printf '%-18s' "$(spacing_label)")$(get_notespacing) mm"
         row 2 "Left margin line   $(margin_on && echo ON || echo OFF)"
@@ -321,7 +316,7 @@ _draw_body() {
         printf '\n  %s\n' "${DIM}↑/↓ move · enter change · esc back · q quit${R}"
     elif [ "$SCREEN" = printers ]; then
         printf '\n  %s %s\n' "${TITLE}" "${DIM}· Choose printers${R}"
-        printf '  %s\n' "$CSEP"
+        printf '  %s\n' "$SEP"
         if [ "${#AVAIL[@]}" -eq 0 ]; then
             printf '   %s\n' "${DIM}No printers found. Add one in System Settings ▸ Printers.${R}"
         else
@@ -340,7 +335,7 @@ _draw_body() {
         printf '\n  %s\n' "${DIM}↑/↓ move · enter toggle · esc/Done back · q quit${R}"
     elif [ "$SCREEN" = settings ]; then
         printf '\n  %s %s\n' "${TITLE}" "${DIM}· Settings${R}"
-        printf '  %s\n' "$CSEP"
+        printf '  %s\n' "$SEP"
         local pcount; pcount=$(sel_count)
         local plabel; if [ "$pcount" -eq 0 ]; then plabel="$printer"; else plabel="$pcount selected ($printer)"; fi
         row 0 "Notifications      $(notify_on && echo ON || echo OFF)"
@@ -357,27 +352,25 @@ _draw_body() {
         printf '\n  %s\n' "${DIM}↑/↓ move · enter select · esc back · q quit${R}"
     else
         printf '\n  %s  %s\n' "${TITLE}" "${DIM}v$VERSION${R}"
-        printf '  %s\n' "$CSEP"
+        printf '  %s\n' "$SEP"
         printf '   Agent        %s\n' "$agent"
-        printf '   Printer      %s%s%s\n' "$CYN" "$printer" "$R"
-        printf '   Schedule     %severy %s%s\n' "$YEL" "$(fmt_days "$(get_interval)")" "$R"
-        printf '   Last print   %s%s%s\n' "$MAG" "$(last_phrase)" "$R"
-        printf '   Next (est)   %s%s%s\n' "$DIM" "$(next_phrase)" "$R"
+        printf '   Printer      %s%s%s\n' "$GRN" "$printer" "$R"
+        printf '   Schedule     %severy %s%s\n' "$GRN" "$(fmt_days "$(get_interval)")" "$R"
+        printf '   Last print   %s%s%s\n' "$GRN" "$(last_phrase)" "$R"
+        printf '   Next (est)   %s%s%s\n' "$GRN" "$(next_phrase)" "$R"
         printf '   Notifications %s\n' "$(notify_on && echo "${GRN}on${R}" || echo "${DIM}off${R}")"
         printf '  %s\n' "$SEP"
-        # colour-coded by category: green=power, cyan=print, magenta=deep flush,
-        # yellow=settings, blue=info, red=quit
-        row 0 "$(is_loaded && echo 'Disable scheduled keep-alive' || echo 'Enable scheduled keep-alive')" "$GRN"
+        row 0 "$(is_loaded && echo 'Disable scheduled keep-alive' || echo 'Enable scheduled keep-alive')"
         printf '  %s\n' "$SEP"
-        row 1 "Print keep-alive now   (auto: $(auto_tier))" "$CYN"
-        row 2 "Intensive flush now    (heavy, 2 pages)"     "$MAG"
-        row 3 "Preview (dry run)"                           "$CYN"
-        row 4 "History / log"                               "$BLU"
-        row 5 "Settings ▸"                                  "$YEL"
-        row 6 "Help"                                        "$BLU"
-        row 7 "Check for updates"                           "$BLU"
+        row 1 "Print keep-alive now   ${DIM}(auto: $(auto_tier))${R}"
+        row 2 "Intensive flush now    ${DIM}(heavy, 2 pages)${R}"
+        row 3 "Preview (dry run)"
+        row 4 "History / log"
+        row 5 "Settings ▸"
+        row 6 "Help"
+        row 7 "Check for updates"
         printf '  %s\n' "$SEP"
-        row 8 "Quit"                                        "$REDC"
+        row 8 "Quit"
         printf '  %s\n' "$SEP"
         printf '  %s\n' "${GRN}${MSG}${R}"
         printf '\n  %s\n' "${DIM}↑/↓ move · enter select · q quit${R}"
