@@ -15,8 +15,8 @@
 #   ./release.sh 1.0.1                    # prepare + sign + stage; you commit/push
 #   ./release.sh --dry-run 1.0.1          # validate only; change nothing
 #
-# Signing key: $PKEEP_SIGNING_KEY, else ~/.config/printer-keepalive/update.key
-# (see SIGNING.md).
+# Signing key: $PKEEP_SIGNING_KEY, else ~/.config/printer-keepalive/update.md
+# (see SIGNING.md). The key is plain PEM regardless of extension.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
@@ -24,7 +24,7 @@ SRC="$HERE/src"
 CTL_SRC="$SRC/pkeep"                      # control script (carries VERSION + UPDATE_PUBKEY)
 WORKER_SRC="$SRC/printer-keepalive.sh"    # the worker
 SCRIPTS="$HOME/Library/Scripts"
-KEY="${PKEEP_SIGNING_KEY:-$HOME/.config/printer-keepalive/update.key}"
+KEY="${PKEEP_SIGNING_KEY:-$HOME/.config/printer-keepalive/update.md}"
 
 BLD=$'\033[1m'; GRN=$'\033[32m'; YEL=$'\033[33m'; RED=$'\033[31m'; DIM=$'\033[2m'; R=$'\033[0m'
 bold(){ printf '%s%s%s\n' "$BLD" "$1" "$R"; }
@@ -128,8 +128,8 @@ fi
 
 # --- 6. stage, guard against key material, commit + push -------------------
 git add -A
-if git diff --cached --name-only | grep -iqE '\.(key|pem)$|update\.key'; then
-    die "refusing to commit — key material is staged (check .gitignore)"
+if git diff --cached --name-only | grep -iqE '\.(key|pem)$|/?update\.(key|md)$'; then
+    die "refusing to commit — signing-key material is staged (check .gitignore)"
 fi
 [ -s "$HERE/SHA256SUMS.sig" ] || die "SHA256SUMS.sig missing — refusing to commit an unsigned release"
 ok "staged release files (no key material)"

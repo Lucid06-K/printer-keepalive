@@ -30,6 +30,7 @@ PRINTER_FILE="$SCRIPTS/printer_keepalive.printer"     # selected printers, one n
 INTERVAL_FILE="$SCRIPTS/printer_keepalive.interval"   # schedule seconds
 LEAD_FILE="$SCRIPTS/printer_keepalive.lead"           # heads-up lead seconds
 NONOTIFY_FLAG="$SCRIPTS/printer_keepalive.nonotify"   # presence = notifications OFF
+LINES_FLAG="$SCRIPTS/printer_keepalive.lines"         # presence = ruled note paper below
 LASTPRINT_FILE="$SCRIPTS/printer_keepalive.lastprint" # epoch of last good print
 HISTORY_FILE="$SCRIPTS/printer_keepalive.history"     # TSV: epoch ISO tier days copies printer job
 LOG="$HOME/Library/Logs/printer-keepalive.log"
@@ -63,6 +64,7 @@ get_last() {
     case "$v" in ''|*[!0-9]*) echo 0 ;; *) echo "$v" ;; esac
 }
 notify_on() { [ ! -e "$NONOTIFY_FLAG" ]; }
+lines_on()  { [ -e "$LINES_FLAG" ]; }   # fill the space below the test strip with ruled lines
 
 # post a notification via the applet (env-var payload, dsort's playbook). Silent
 # if muted or the applet isn't installed yet.
@@ -100,53 +102,88 @@ decide_tier() {
 
 # --- build the keep-alive PDF for a given tier -----------------------------
 # build_pdf <tier> <subtitle>  -> echoes the temp PDF path
+# The test strip (all ink channels) runs across the top of the page so the area
+# below is free; with ruled-paper mode on, that area becomes lined note paper.
 build_pdf() {
-    local tier="$1" subtitle="$2" pdf stub
+    local tier="$1" subtitle="$2" pdf stub ln
     stub="$(mktemp -t pkeepalive)"; pdf="${stub}.pdf"; mv "$stub" "$pdf"
     [ -z "$PYTHON" ] && { rm -f "$pdf"; echo "ERROR: python3 not found" >&2; return 1; }
-    "$PYTHON" - "$pdf" "$tier" "$subtitle" <<'PY'
+    ln=$(lines_on && echo 1 || echo 0)
+    "$PYTHON" - "$pdf" "$tier" "$ln" "$subtitle" <<'PY'
 import sys
-out, tier, subtitle = sys.argv[1], sys.argv[2], (sys.argv[3] if len(sys.argv) > 3 else "")
-W, H = 595, 842                      # A4 points
-inks = [(1,0,0,0,"C"),(0,1,0,0,"M"),(0,0,1,0,"Y"),(0,0,0,1,"K")]
+out  = sys.argv[1]
+tier = sys.argv[2] if len(sys.argv) > 2 else "light"
+ruled = (sys.argv[3] == "1") if len(sys.argv) > 3 else False
+subtitle = sys.argv[4] if len(sys.argv) > 4 else ""
+if tier not in ("light", "medium", "heavy"): tier = "light"
 
-MARGIN, TOP, BOTTOM = 40, 792, 40
-usable = W - 2 * MARGIN
-slot = usable / len(inks)
-height = TOP - BOTTOM
+W, H = 595, 842                 # A4 points
+ML, MR = 54, 54                 # left/right margins
+CW = W - ML - MR                # content width
+RIGHT = W - MR
 
-# per-tier geometry: line width + horizontal offsets within each colour slot
-if tier == "heavy":
-    width, offsets = 28, [0]         # solid band per channel (deep flush)
-elif tier == "medium":
-    width, offsets = 3, [-11, 0, 11] # comb of 3 thin lines per channel
-else:
-    tier, width, offsets = "light", 3, [0]   # single thin line per channel
+# the four ink channels, top→bottom, as a clean CMYK strip
+inks = [(1, 0, 0, 0, "C"), (0, 1, 0, 0, "M"), (0, 0, 1, 0, "Y"), (0, 0, 0, 1, "K")]
 
-title = f"Inkjet nozzle keep-alive  -  {tier} flush"
-lines = [
-    f"BT /F1 12 Tf 0 0 0 1 k {MARGIN} 815 Td ({title}) Tj ET",
-]
-if subtitle:
-    safe = subtitle.replace("(", " ").replace(")", " ").replace("\\", " ")
-    lines.append(f"BT /F1 8 Tf 0 0 0 1 k {MARGIN} 800 Td ({safe}) Tj ET")
+# per-tier strip geometry: bar height + gap. Heavier = more ink (deeper flush).
+BH, GAP = {"light": (8, 6), "medium": (14, 6), "heavy": (24, 7)}[tier]
 
-for i, (c, m, ye, kk, name) in enumerate(inks):
-    xc = MARGIN + slot * (i + 0.5)
-    for off in offsets:
-        x = xc + off - width / 2.0
-        lines.append(f"{c} {m} {ye} {kk} k {x:.1f} {BOTTOM} {width} {height} re f")
-    lines.append(f"BT /F1 8 Tf 0 0 0 1 k {xc-2:.1f} {TOP+5} Td ({name}) Tj ET")
+def esc(s):
+    return s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+def text(x, y, size, k, s, font="F1", tc=0.0):
+    return (f"BT /{font} {size} Tf 0 0 0 {k} k {tc} Tc "
+            f"{x:.1f} {y:.1f} Td ({esc(s)}) Tj 0 Tc ET")
+def rect(x, y, w, h, c, m, ye, k):
+    return f"{c} {m} {ye} {k} k {x:.1f} {y:.1f} {w:.1f} {h:.1f} re f"
+def line(x1, y1, x2, y2, w, c, m, ye, k):
+    return f"{c} {m} {ye} {k} K {w} w {x1:.1f} {y1:.1f} m {x2:.1f} {y2:.1f} l S"
 
-content = ("\n".join(lines) + "\n").encode("latin-1")
+ops = []
+# header: title (bold, tracked) + subtitle (muted)
+ops.append(text(ML, 802, 13, 0.82, "NOZZLE KEEP-ALIVE", font="F2", tc=1.6))
+sub = subtitle.strip()
+sub = (sub + "  -  " if sub else "") + f"{tier} flush"
+ops.append(text(ML, 788, 8, 0.45, sub))
+
+# colour strip across the short side, just below the header
+y = 768
+strip_bottom = y
+for c, m, ye, k, label in inks:
+    ops.append(rect(ML, y - BH, CW, BH, c, m, ye, k))
+    ops.append(text(RIGHT + 6, y - BH + (BH - 6) / 2, 6.5, 0.45, label))  # tiny label in the right margin
+    strip_bottom = y - BH
+    y = strip_bottom - GAP
+
+# hairline rule separating the test strip from the space below
+rule_y = strip_bottom - 16
+ops.append(line(ML, rule_y, RIGHT, rule_y, 0.6, 0, 0, 0, 0.25))
+
+# ruled note paper below (optional)
+if ruled:
+    BM = 58                       # bottom margin
+    LS = 26                       # line spacing
+    notes_top = rule_y - 30
+    ops.append(text(ML, notes_top + 12, 7, 0.32, "Notes", font="F2"))
+    yy = notes_top
+    while yy > BM:
+        ops.append(line(ML, yy, RIGHT, yy, 0.5, 0, 0, 0, 0.14))   # faint grey rule
+        yy -= LS
+    # soft margin rule (muted red), like classic ruled paper
+    ops.append(line(ML + 30, notes_top + 6, ML + 30, BM, 0.7, 0, 0.30, 0.22, 0))
+
+# subtle footer so the page is identifiable even after it's written on
+ops.append(text(ML, 40, 6.5, 0.35, "Printer Keep-Alive  ·  inkjet nozzle maintenance"))
+
+content = ("\n".join(ops) + "\n").encode("latin-1")
 
 objs = [
     b"<< /Type /Catalog /Pages 2 0 R >>",
     b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
     (f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {W} {H}] "
-     f"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>").encode("latin-1"),
+     f"/Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>").encode("latin-1"),
     b"<< /Length %d >>\nstream\n" % len(content) + content + b"endstream",
     b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
 ]
 buf = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"
 offs = []

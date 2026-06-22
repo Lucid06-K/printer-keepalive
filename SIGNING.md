@@ -12,11 +12,15 @@ install nothing extra.
 
 ## Keys
 
-- **Private key:** `~/.config/printer-keepalive/update.key` — RSA-3072,
-  `chmod 600`, **never committed** (the repo `.gitignore` blocks `*.key`/`*.pem`
-  as a backstop). **Back it up** in your password manager. If it's lost you can
-  no longer ship verifiable updates and must migrate users via a fresh clone
-  with a new key.
+- **Private key:** `~/.config/printer-keepalive/update.md` — RSA-3072,
+  `chmod 600`, **never committed**. It uses a `.md` extension (it's plain PEM;
+  openssl ignores the extension), so the repo `.gitignore` blocks `*.key`,
+  `*.pem` **and the exact name `update.md`** as a backstop — note it can't be a
+  blanket `*.md` ignore because the repo's docs are markdown too. ⚠️ Because the
+  key is markdown-named, keep it OUT of any notes/markdown vault that syncs to
+  the cloud. **Back it up** in your password manager. If it's lost you can no
+  longer ship verifiable updates and must migrate users via a fresh clone with a
+  new key.
 - **Public key:** embedded as the `UPDATE_PUBKEY` constant in `src/pkeep`. The
   client verifies with **its own installed** copy of this key
   (trust-on-first-use), never a freshly downloaded one.
@@ -27,9 +31,9 @@ One-time generation (already done):
 mkdir -p ~/.config/printer-keepalive && chmod 700 ~/.config/printer-keepalive
 umask 077
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 \
-    -out ~/.config/printer-keepalive/update.key
-chmod 600 ~/.config/printer-keepalive/update.key
-openssl pkey -in ~/.config/printer-keepalive/update.key -pubout   # paste into UPDATE_PUBKEY
+    -out ~/.config/printer-keepalive/update.md
+chmod 600 ~/.config/printer-keepalive/update.md
+openssl pkey -in ~/.config/printer-keepalive/update.md -pubout   # paste into UPDATE_PUBKEY
 ```
 
 ## Shipping a release
@@ -52,10 +56,10 @@ regenerate **and sign** the manifest, then commit the `.sig` alongside it:
 ```sh
 cd <repo>
 ( cd src && shasum -a 256 printer-keepalive.sh pkeep > ../SHA256SUMS )
-openssl dgst -sha256 -sign ~/.config/printer-keepalive/update.key \
+openssl dgst -sha256 -sign ~/.config/printer-keepalive/update.md \
     -out SHA256SUMS.sig SHA256SUMS
 # sanity check before committing:
-openssl pkey -in ~/.config/printer-keepalive/update.key -pubout 2>/dev/null > /tmp/pk.pub
+openssl pkey -in ~/.config/printer-keepalive/update.md -pubout 2>/dev/null > /tmp/pk.pub
 openssl dgst -sha256 -verify /tmp/pk.pub -signature SHA256SUMS.sig SHA256SUMS   # → Verified OK
 git add SHA256SUMS SHA256SUMS.sig src/ VERSION
 git commit && git push
@@ -69,7 +73,7 @@ failure.
 
 If you must rotate (suspected compromise, or routine hygiene):
 
-1. Generate `update.key.new` and its public key.
+1. Generate `update.md.new` and its public key.
 2. In `src/pkeep`, set `UPDATE_PUBKEY` to the **new** public key.
 3. Sign that release's `SHA256SUMS` with the **OLD** key — installed clients
    still carry the old public key, so that's what they verify against. (If you

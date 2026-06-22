@@ -18,6 +18,7 @@
 #   pkeep printer rm NAME   remove a printer from the cycle
 #   pkeep interval [days]   show / set the schedule interval
 #   pkeep lead [secs]       show / set the heads-up lead time
+#   pkeep lines on|off      ruled note paper below the test strip
 #   pkeep update            fetch + verify + install the latest version
 #   pkeep autoupdate on|off opt-in daily auto-update
 #
@@ -36,6 +37,7 @@ PRINTER_FILE="$SCRIPTS/printer_keepalive.printer"
 INTERVAL_FILE="$SCRIPTS/printer_keepalive.interval"
 LEAD_FILE="$SCRIPTS/printer_keepalive.lead"
 NONOTIFY_FLAG="$SCRIPTS/printer_keepalive.nonotify"
+LINES_FLAG="$SCRIPTS/printer_keepalive.lines"
 LASTPRINT_FILE="$SCRIPTS/printer_keepalive.lastprint"
 HISTORY_FILE="$SCRIPTS/printer_keepalive.history"
 
@@ -48,7 +50,7 @@ REPO_RAW="https://raw.githubusercontent.com/Lucid06-K/printer-keepalive/main"
 
 DEFAULT_INTERVAL=1209600
 DEFAULT_LEAD=8
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 # Public key for verifying the update manifest's signature. The matching private
 # key is held OFFLINE by the maintainer (see SIGNING.md) and is never in the repo.
@@ -74,6 +76,7 @@ R=$'\033[0m'; REV=$'\033[7m'; DIM=$'\033[2m'; GRN=$'\033[32m'; BLD=$'\033[1m'
 trim() { tr -d ' \t\n\r'; }
 is_loaded()  { launchctl print "$TARGET" >/dev/null 2>&1; }
 notify_on()  { [ ! -e "$NONOTIFY_FLAG" ]; }
+lines_on()   { [ -e "$LINES_FLAG" ]; }
 # --- printer selection (multiple allowed) ----------------------------------
 # Selected printers live one-per-line in PRINTER_FILE. Empty => fall back to the
 # system default destination.
@@ -164,6 +167,7 @@ status_text() {
     echo "Would print:   $(auto_tier) flush now"
     notify_on && echo "Notifications: on" || echo "Notifications: off"
     echo "Heads-up lead: $(get_lead)s"
+    lines_on && echo "Note paper:    ruled lines below the strip" || echo "Note paper:    off (blank below the strip)"
     autoupdate_on && echo "Auto-update:   on (daily, verified)" || echo "Auto-update:   off (manual: pkeep update)"
     echo "Version:       $VERSION"
 }
@@ -246,7 +250,7 @@ maybe_autoupdate() {
 # ===========================================================================
 SCREEN=main; focus=0; MSG=""
 MAIN_MAX=8      # selectable indices 0..8
-SET_MAX=5       # 0..5
+SET_MAX=6       # 0..6
 AVAIL=()        # available printers, populated when the chooser opens
 
 _paint() {
@@ -295,9 +299,10 @@ _draw_body() {
         row 1 "Printers ▸         $plabel"
         row 2 "Schedule           every $(fmt_days "$(get_interval)")"
         row 3 "Heads-up lead      $(get_lead)s"
-        row 4 "Auto-update        $(autoupdate_on && echo ON || echo OFF)"
+        row 4 "Lined note paper   $(lines_on && echo ON || echo OFF)"
+        row 5 "Auto-update        $(autoupdate_on && echo ON || echo OFF)"
         printf '  %s\n' "$SEP"
-        row 5 "← Back to menu"
+        row 6 "← Back to menu"
         printf '  %s\n' "$SEP"
         printf '  %s\n' "${GRN}${MSG}${R}"
         printf '\n  %s\n' "${DIM}↑/↓ move · enter select · esc back · q quit${R}"
@@ -405,8 +410,9 @@ ui() {
                         1) open_printers;;
                         2) local d; d=$(prompt_line "Schedule interval in days (now $(fmt_days "$(get_interval)")): "); set_interval_days "$d" && MSG="Schedule set to every ${d}d" || MSG="Unchanged";;
                         3) local s; s=$(prompt_line "Heads-up lead in seconds (now $(get_lead)s): "); set_lead_secs "$s" && MSG="Lead set to ${s}s" || MSG="Unchanged";;
-                        4) if autoupdate_on; then rm -f "$AUTOUPDATE_FLAG"; MSG="Auto-update OFF"; else touch "$AUTOUPDATE_FLAG"; MSG="Auto-update ON (checks daily)"; fi;;
-                        5) SCREEN=main; focus=0; MSG="";;
+                        4) if lines_on; then rm -f "$LINES_FLAG"; MSG="Note paper OFF (blank below)"; else touch "$LINES_FLAG"; MSG="Note paper ON (ruled lines below)"; fi;;
+                        5) if autoupdate_on; then rm -f "$AUTOUPDATE_FLAG"; MSG="Auto-update OFF"; else touch "$AUTOUPDATE_FLAG"; MSG="Auto-update ON (checks daily)"; fi;;
+                        6) SCREEN=main; focus=0; MSG="";;
                     esac
                 else
                     case "$focus" in
@@ -444,6 +450,10 @@ show_help() {
   Before each print it pops a heads-up notification so nobody's surprised by
   the printer waking. Every print is logged (see History / log).
 
+  The test strip runs across the top, leaving the page below free. Turn on
+  Settings ▸ Lined note paper to fill that space with ruled lines so the sheet
+  doubles as note paper (CLI: 'pkeep lines on|off').
+
   Have more than one printer? Settings ▸ Printers lets you tick several — the
   keep-alive then runs on every selected printer each cycle.
 
@@ -480,6 +490,7 @@ case "${1:-}" in
         esac;;
     interval)  if [ -n "${2:-}" ]; then set_interval_days "$2" && echo "Schedule set to every ${2}d" || echo "Invalid"; else fmt_days "$(get_interval)"; fi;;
     lead)      if [ -n "${2:-}" ]; then set_lead_secs "$2" && echo "Lead set to ${2}s" || echo "Invalid"; else echo "$(get_lead)s"; fi;;
+    lines)     case "${2:-}" in on) touch "$LINES_FLAG"; echo "Note paper ON";; off) rm -f "$LINES_FLAG"; echo "Note paper OFF";; *) lines_on && echo on || echo off;; esac;;
     help|-h|--help) show_help;;
     version|--version) echo "pkeep $VERSION";;
     *) echo "unknown command: $1" >&2; echo "try: pkeep help" >&2; exit 2;;

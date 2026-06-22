@@ -3,7 +3,10 @@
 *.bak
 
 # update-signing private keys must NEVER be committed (they live offline, e.g.
-# ~/.config/printer-keepalive/update.key). Belt-and-suspenders even though
-# they're out of tree.
+# ~/.config/printer-keepalive/update.md). Belt-and-suspenders even though
+# they're out of tree. NOTE: the signing key uses a .md extension, so block its
+# exact name explicitly — we can't ignore all *.md (README.md etc. are tracked).
 *.key
 *.pem
+update.md
+update.key
