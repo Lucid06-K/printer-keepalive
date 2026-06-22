@@ -343,7 +343,7 @@ elif ink_mode == "separate":
         gauge(ML + (i + 0.5) * qw, v)
 
 if ink_mode in ("combined", "separate"):
-    ops.append(text(RIGHT + 6, rule_y - 2, 6, 0.45, "ink levels"))
+    ops.append(text(RIGHT + 6, rule_y - 2, 6, 0.45, "INK LEVELS"))
 
 # note paper below (optional): lines / grid / dots, edge to edge, down to the
 # bottom of the page (the printer's own unprintable margin trims the extremes).
