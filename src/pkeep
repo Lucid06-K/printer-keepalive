@@ -23,7 +23,7 @@
 #   pkeep notespacing MM    rule/grid spacing in millimetres (4-30)
 #   pkeep margin on|off     workbook-style left margin line
 #   pkeep marginmm MM       margin line distance from the left edge (10-80)
-#   pkeep art on|off        rotating CMYK ASCII art in the top-right corner
+#   pkeep art off|rotate|N  corner ASCII art: off, rotate all 15, or pin #N
 #   pkeep artsheet          print a gallery of all 15 art pieces
 #   pkeep update            fetch + verify + install the latest version
 #   pkeep autoupdate on|off opt-in daily auto-update
@@ -61,7 +61,7 @@ REPO_RAW="https://raw.githubusercontent.com/Lucid06-K/printer-keepalive/main"
 
 DEFAULT_INTERVAL=1209600
 DEFAULT_LEAD=8
-VERSION="1.13.0"
+VERSION="1.14.0"
 
 # Public key for verifying the update manifest's signature. The matching private
 # key is held OFFLINE by the maintainer (see SIGNING.md) and is never in the repo.
@@ -99,7 +99,23 @@ get_notestyle() {
 }
 get_notespacing() { local v=""; [ -r "$NOTESPACING_FILE" ] && v=$(trim < "$NOTESPACING_FILE"); case "$v" in ''|*[!0-9]*) echo 8;; *) echo "$v";; esac; }
 lines_on()   { [ "$(get_notestyle)" != off ]; }
-art_on()     { [ -e "$ARTFLAG" ]; }
+# ASCII-art mode: off | rotate | <1-15>. Names mirror the worker's ART list order.
+ART_NAMES=(ink-drop printer cat bunny dog smiley bear coffee mouse rocket fish owl penguin duck sparkles)
+art_mode() {
+    [ -e "$ARTFLAG" ] || { echo off; return; }
+    local v; v=$(trim < "$ARTFLAG")
+    case "$v" in ''|rotate) echo rotate;; [1-9]|1[0-5]) echo "$v";; *) echo rotate;; esac
+}
+set_artmode() {
+    case "$1" in
+        off)          rm -f "$ARTFLAG";;
+        on|rotate)    printf 'rotate\n' > "$ARTFLAG";;
+        [1-9]|1[0-5]) printf '%s\n' "$1" > "$ARTFLAG";;
+        *)            return 1;;
+    esac
+}
+art_on()     { [ "$(art_mode)" != off ]; }
+art_summary() { local m; m=$(art_mode); case "$m" in off) echo off;; rotate) echo "rotate (all 15)";; *) echo "#$m ${ART_NAMES[$((m-1))]}";; esac; }
 set_notestyle()   { case "$1" in off|lines|grid|dots) printf '%s\n' "$1" > "$NOTESTYLE_FILE"; rm -f "$LINES_FLAG";; *) return 1;; esac; }
 cycle_notestyle() { case "$(get_notestyle)" in off) set_notestyle lines;; lines) set_notestyle grid;; grid) set_notestyle dots;; *) set_notestyle off;; esac; }
 set_notespacing() { case "$1" in ''|*[!0-9]*) return 1;; esac; [ "$1" -lt 4 ] && return 1; [ "$1" -gt 30 ] && return 1; printf '%s\n' "$1" > "$NOTESPACING_FILE"; }
@@ -200,7 +216,7 @@ status_text() {
     notify_on && echo "Notifications: on" || echo "Notifications: off"
     echo "Heads-up lead: $(get_lead)s"
     echo "Note paper:    $(notepaper_summary)"
-    art_on && echo "ASCII art:     on (rotates each print)" || echo "ASCII art:     off"
+    echo "ASCII art:     $(art_summary)"
     autoupdate_on && echo "Auto-update:   on (daily, verified)" || echo "Auto-update:   off (manual: pkeep update)"
     echo "Version:       $VERSION"
 }
@@ -304,7 +320,24 @@ _draw_body() {
     local agent printer; printer=$(printers_summary)
     is_loaded && agent="${GRN}● ON${R}" || agent="${DIM}○ OFF${R}"
 
-    if [ "$SCREEN" = notepaper ]; then
+    if [ "$SCREEN" = art ]; then
+        printf '\n  %s %s\n' "${TITLE}" "${DIM}· ASCII art${R}"
+        printf '  %s\n' "$SEP"
+        local am; am=$(art_mode)
+        artrow() { local mk; [ "$2" = 1 ] && mk="${GRN}●${R}" || mk="${DIM}○${R}"; row "$1" "$mk  $3"; }
+        artrow 0 "$([ "$am" = off ] && echo 1)"    "Off"
+        artrow 1 "$([ "$am" = rotate ] && echo 1)" "Rotate  (cycle all 15, one per print)"
+        local j
+        for j in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            artrow $((j+1)) "$([ "$am" = "$j" ] && echo 1)" "#$j ${ART_NAMES[$((j-1))]}"
+        done
+        printf '  %s\n' "$SEP"
+        row 17 "← Back to settings"
+        printf '  %s\n' "$SEP"
+        printf '  %s\n' "${DIM}Pick a piece to pin it, or Rotate to cycle through them all.${R}"
+        printf '  %s\n' "${GRN}${MSG}${R}"
+        printf '\n  %s\n' "${DIM}↑/↓ move · enter select · esc back · q quit${R}"
+    elif [ "$SCREEN" = notepaper ]; then
         printf '\n  %s %s\n' "${TITLE}" "${DIM}· Note paper${R}"
         printf '  %s\n' "$SEP"
         row 0 "Style              $(get_notestyle)"
@@ -346,7 +379,7 @@ _draw_body() {
         row 2 "Schedule           every $(fmt_days "$(get_interval)")"
         row 3 "Heads-up lead      $(get_lead)s"
         row 4 "Note paper ▸       $(notepaper_summary)"
-        row 5 "ASCII art          $(art_on && echo 'ON (rotates)' || echo OFF)"
+        row 5 "ASCII art ▸        $(art_summary)"
         row 6 "Auto-update        $(autoupdate_on && echo ON || echo OFF)"
         printf '  %s\n' "$SEP"
         row 7 "← Back to menu"
@@ -461,7 +494,7 @@ preview_page() {
 
     printf '\033[2J\033[H'
     printf '\n  %sPage preview%s  %s· %s flush · note: %s · art: %s%s\n\n' \
-        "$BLD" "$R" "$DIM" "$tier" "$(notepaper_summary)" "$(art_on && echo on || echo off)" "$R"
+        "$BLD" "$R" "$DIM" "$tier" "$(notepaper_summary)" "$(art_summary)" "$R"
     bar() { printf '%s|%s%*s%s|%s\n' "$pad" "$1" "$W" '' "$R" "$2"; }   # colour bar row + right label
     printf '%s+%s+\n' "$pad" "$dash"
     printf '%s|%-*s|\n' "$pad" "$W" " PRINTER DON'T DIE PLEASE!!"
@@ -520,15 +553,28 @@ ui() {
             settings)  max=$SET_MAX;;
             printers)  max=${#AVAIL[@]};;   # 0..N-1 printers, N = "Done"
             notepaper) max=4;;
+            art)       max=17;;             # 0 Off, 1 Rotate, 2..16 pieces, 17 Back
             *)         max=$MAIN_MAX;;
         esac
         case "$key" in
             up)   focus=$(( focus>0 ? focus-1 : max ));;
             down) focus=$(( focus<max ? focus+1 : 0 ));;
             q|Q)  break;;
-            esc)  case "$SCREEN" in settings) SCREEN=main; focus=0; MSG="";; printers|notepaper) SCREEN=settings; focus=$([ "$SCREEN" = printers ] && echo 1 || echo 4); MSG="";; esac;;
+            esc)  case "$SCREEN" in
+                    settings)  SCREEN=main; focus=0;;
+                    printers)  SCREEN=settings; focus=1;;
+                    notepaper) SCREEN=settings; focus=4;;
+                    art)       SCREEN=settings; focus=5;;
+                  esac; MSG="";;
             ''|$'\n')
-                if [ "$SCREEN" = notepaper ]; then
+                if [ "$SCREEN" = art ]; then
+                    case "$focus" in
+                        0)  set_artmode off;    MSG="ASCII art OFF";;
+                        1)  set_artmode rotate; MSG="ASCII art: rotate (all 15)";;
+                        17) SCREEN=settings; focus=5; MSG="";;
+                        *)  set_artmode "$((focus-1))"; MSG="Pinned art #$((focus-1)) ${ART_NAMES[$((focus-2))]}";;
+                    esac
+                elif [ "$SCREEN" = notepaper ]; then
                     case "$focus" in
                         0) cycle_notestyle; MSG="Style: $(get_notestyle)";;
                         1) local sp; sp=$(prompt_line "$(spacing_label) in mm (4-30, now $(get_notespacing)): "); set_notespacing "$sp" && MSG="$(spacing_label) set to ${sp}mm" || MSG="Unchanged (4-30 only)";;
@@ -546,7 +592,7 @@ ui() {
                         2) local d; d=$(prompt_line "Schedule interval in days (now $(fmt_days "$(get_interval)")): "); set_interval_days "$d" && MSG="Schedule set to every ${d}d" || MSG="Unchanged";;
                         3) local s; s=$(prompt_line "Heads-up lead in seconds (now $(get_lead)s): "); set_lead_secs "$s" && MSG="Lead set to ${s}s" || MSG="Unchanged";;
                         4) SCREEN=notepaper; focus=0; MSG="";;
-                        5) if art_on; then rm -f "$ARTFLAG"; MSG="ASCII art OFF"; else touch "$ARTFLAG"; MSG="ASCII art ON (rotates each print)"; fi;;
+                        5) SCREEN=art; focus=0; MSG="";;
                         6) if autoupdate_on; then rm -f "$AUTOUPDATE_FLAG"; MSG="Auto-update OFF"; else touch "$AUTOUPDATE_FLAG"; MSG="Auto-update ON (checks daily)"; fi;;
                         7) SCREEN=main; focus=0; MSG="";;
                     esac
@@ -599,9 +645,10 @@ show_help() {
   Have more than one printer? Settings ▸ Printers lets you tick several — the
   keep-alive then runs on every selected printer each cycle.
 
-  ASCII art (Settings ▸ ASCII art, off by default): tucks one of 15 tiny art
-  pieces into the top-right corner, rotating each print, every line in C/M/Y/K.
-  'pkeep art on|off' to toggle; 'pkeep artsheet' prints a gallery of all 15.
+  ASCII art (Settings ▸ ASCII art, off by default): a tiny art piece in the
+  top-right corner, every line in C/M/Y/K. Choose Off, Rotate (cycle all 15,
+  one per print), or pin a specific piece. CLI: 'pkeep art off|rotate|<1-15>';
+  'pkeep artsheet' prints a gallery of all 15.
 
   Updates: "Check for updates" installs the latest verified version (signed +
   checksummed). Turn on Settings ▸ Auto-update for a daily check. CLI:
@@ -642,7 +689,13 @@ case "${1:-}" in
     notespacing) if [ -n "${2:-}" ]; then set_notespacing "$2" && echo "Spacing set to ${2}mm" || echo "Invalid (4-30 mm)"; else echo "$(get_notespacing)mm"; fi;;
     margin)    case "${2:-}" in on) touch "$MARGIN_FLAG"; echo "Left margin line ON";; off) rm -f "$MARGIN_FLAG"; echo "Left margin line OFF";; *) margin_on && echo on || echo off;; esac;;
     marginmm)  if [ -n "${2:-}" ]; then set_marginmm "$2" && echo "Margin distance set to ${2}mm" || echo "Invalid (10-80 mm)"; else echo "$(get_marginmm)mm"; fi;;
-    art)       case "${2:-}" in on) touch "$ARTFLAG"; echo "ASCII art ON";; off) rm -f "$ARTFLAG"; echo "ASCII art OFF";; *) art_on && echo on || echo off;; esac;;
+    art)       case "${2:-}" in
+                   "")           art_summary;;
+                   on|rotate)    set_artmode rotate; echo "ASCII art: rotate (all 15)";;
+                   off)          set_artmode off; echo "ASCII art OFF";;
+                   [1-9]|1[0-5]) set_artmode "$2" && echo "Pinned art #$2 ${ART_NAMES[$(($2-1))]}";;
+                   *)            echo "usage: pkeep art off|rotate|<1-15>";;
+               esac;;
     artsheet)  "$WORKER" --art-sheet;;
     help|-h|--help) show_help;;
     version|--version) echo "pkeep $VERSION";;

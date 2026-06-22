@@ -93,7 +93,13 @@ get_marginmm() {   # distance of the margin line from the left edge, mm (default
     local v=""; [ -r "$MARGINMM_FILE" ] && v=$(trim < "$MARGINMM_FILE")
     case "$v" in ''|*[!0-9]*) echo 25 ;; *) echo "$v" ;; esac
 }
-art_on()    { [ -e "$ARTFLAG" ]; }
+# ASCII-art mode: off | rotate | <1-15> (a pinned piece). ARTFLAG holds the value;
+# an empty/legacy file means rotate (old on=rotate behaviour).
+art_mode() {
+    [ -e "$ARTFLAG" ] || { echo off; return; }
+    local v; v=$(trim < "$ARTFLAG")
+    case "$v" in ''|rotate) echo rotate;; [1-9]|1[0-5]) echo "$v";; *) echo rotate;; esac
+}
 get_artindex() { local v=""; [ -r "$ARTINDEX_FILE" ] && v=$(trim < "$ARTINDEX_FILE"); case "$v" in ''|*[!0-9]*) echo 0;; *) echo "$v";; esac; }
 set_artindex() { printf '%s\n' "$1" > "$ARTINDEX_FILE" 2>/dev/null || true; }
 
@@ -475,9 +481,14 @@ case "$TIER" in
 esac
 
 # --- dry run: build + open, no printing, no state change -------------------
-# which ASCII art to show (rotates each print); -1 = art off. Dry run previews
-# the current art without advancing the rotation.
-ADRY=-1; art_on && ADRY=$(( $(get_artindex) % ART_COUNT ))
+# which ASCII art to show: off (-1), a pinned piece, or the next in the rotation.
+# AROT=1 only for rotate mode (advance + persist the counter after printing).
+AMODE=$(art_mode); AROT=0
+case "$AMODE" in
+    off)    ADRY=-1;;
+    rotate) ADRY=$(( $(get_artindex) % ART_COUNT )); AROT=1;;
+    *)      ADRY=$(( AMODE - 1 ));;
+esac
 if [ "$DRY" = 1 ]; then
     PDF=$(build_pdf "$TIER" "$TS  ·  $since  ·  $HOST  ·  dry run" "$(ink_report "${PRINTERS[0]:-}")" "$ADRY" page)
     echo "[$TS] dry run ($TIER) - $PDF" | tee -a "$LOG"
@@ -502,12 +513,11 @@ notify "Printer Don't Die Please!!" "$body"
 LEAD=$(get_lead); [ "$LEAD" -gt 0 ] && sleep "$LEAD"
 
 COPIES=1   # always one page; heavy gets a denser single page, not a second sheet
-NOW=$(date +%s); OK=0; FAILED=""; ACUR=$ADRY    # ACUR<0 => art off
+NOW=$(date +%s); OK=0; FAILED=""; ACUR=$ADRY    # ACUR<0 => art off; pinned stays put
 
 # print to every selected printer; one history row per printer
 for P in "${PRINTERS[@]}"; do
-    aidx=-1; [ "$ACUR" -ge 0 ] && aidx=$(( ACUR % ART_COUNT ))
-    PDF=$(build_pdf "$TIER" "$TS  ·  $since  ·  $HOST  ·  $P" "$(ink_report "$P")" "$aidx" page)
+    PDF=$(build_pdf "$TIER" "$TS  ·  $since  ·  $HOST  ·  $P" "$(ink_report "$P")" "$ACUR" page)
     if lp -d "$P" -n "$COPIES" -o media=A4 "$PDF" >/dev/null 2>>"$LOG"; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$NOW" "$TS" "$TIER" "$DAYS" "$COPIES" "$P" >> "$HISTORY_FILE"
         OK=$((OK+1))
@@ -519,9 +529,9 @@ for P in "${PRINTERS[@]}"; do
         FAILED="$FAILED $P"
     fi
     rm -f "$PDF"
-    [ "$ACUR" -ge 0 ] && ACUR=$(( ACUR + 1 ))
+    [ "$AROT" = 1 ] && ACUR=$(( (ACUR + 1) % ART_COUNT ))   # advance only when rotating
 done
-[ "$ACUR" -ge 0 ] && set_artindex $(( ACUR % ART_COUNT ))   # save next art for the next run
+[ "$AROT" = 1 ] && set_artindex "$ACUR"   # persist the rotation for the next run
 
 [ "$OK" -gt 0 ] && echo "$NOW" > "$LASTPRINT_FILE"
 if [ "$DAYS" -lt 0 ]; then gapmsg="first run"; else gapmsg="gap was ${DAYS}d"; fi
