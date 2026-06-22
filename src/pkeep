@@ -18,7 +18,8 @@
 #   pkeep printer rm NAME   remove a printer from the cycle
 #   pkeep interval [days]   show / set the schedule interval
 #   pkeep lead [secs]       show / set the heads-up lead time
-#   pkeep lines on|off      ruled note paper below the test strip
+#   pkeep notepaper STYLE   note paper below the strip: off|lines|grid|dots
+#   pkeep notespacing MM    rule/grid spacing in millimetres (4-30)
 #   pkeep update            fetch + verify + install the latest version
 #   pkeep autoupdate on|off opt-in daily auto-update
 #
@@ -38,6 +39,8 @@ INTERVAL_FILE="$SCRIPTS/printer_keepalive.interval"
 LEAD_FILE="$SCRIPTS/printer_keepalive.lead"
 NONOTIFY_FLAG="$SCRIPTS/printer_keepalive.nonotify"
 LINES_FLAG="$SCRIPTS/printer_keepalive.lines"
+NOTESTYLE_FILE="$SCRIPTS/printer_keepalive.notestyle"
+NOTESPACING_FILE="$SCRIPTS/printer_keepalive.notespacing"
 LASTPRINT_FILE="$SCRIPTS/printer_keepalive.lastprint"
 HISTORY_FILE="$SCRIPTS/printer_keepalive.history"
 
@@ -50,7 +53,7 @@ REPO_RAW="https://raw.githubusercontent.com/Lucid06-K/printer-keepalive/main"
 
 DEFAULT_INTERVAL=1209600
 DEFAULT_LEAD=8
-VERSION="1.1.1"
+VERSION="1.2.0"
 
 # Public key for verifying the update manifest's signature. The matching private
 # key is held OFFLINE by the maintainer (see SIGNING.md) and is never in the repo.
@@ -76,7 +79,19 @@ R=$'\033[0m'; REV=$'\033[7m'; DIM=$'\033[2m'; GRN=$'\033[32m'; BLD=$'\033[1m'
 trim() { tr -d ' \t\n\r'; }
 is_loaded()  { launchctl print "$TARGET" >/dev/null 2>&1; }
 notify_on()  { [ ! -e "$NONOTIFY_FLAG" ]; }
-lines_on()   { [ -e "$LINES_FLAG" ]; }
+# note-paper style: off | lines | grid | dots (legacy LINES_FLAG = lines)
+get_notestyle() {
+    local v=""; [ -r "$NOTESTYLE_FILE" ] && v=$(trim < "$NOTESTYLE_FILE")
+    case "$v" in lines|grid|dots|off) echo "$v"; return;; esac
+    [ -e "$LINES_FLAG" ] && { echo lines; return; }
+    echo off
+}
+get_notespacing() { local v=""; [ -r "$NOTESPACING_FILE" ] && v=$(trim < "$NOTESPACING_FILE"); case "$v" in ''|*[!0-9]*) echo 8;; *) echo "$v";; esac; }
+lines_on()   { [ "$(get_notestyle)" != off ]; }
+set_notestyle()   { case "$1" in off|lines|grid|dots) printf '%s\n' "$1" > "$NOTESTYLE_FILE"; rm -f "$LINES_FLAG";; *) return 1;; esac; }
+cycle_notestyle() { case "$(get_notestyle)" in off) set_notestyle lines;; lines) set_notestyle grid;; grid) set_notestyle dots;; *) set_notestyle off;; esac; }
+set_notespacing() { case "$1" in ''|*[!0-9]*) return 1;; esac; [ "$1" -lt 4 ] && return 1; [ "$1" -gt 30 ] && return 1; printf '%s\n' "$1" > "$NOTESPACING_FILE"; }
+notepaper_summary() { local s; s=$(get_notestyle); [ "$s" = off ] && echo "off" || echo "$s · $(get_notespacing)mm"; }
 # --- printer selection (multiple allowed) ----------------------------------
 # Selected printers live one-per-line in PRINTER_FILE. Empty => fall back to the
 # system default destination.
@@ -167,7 +182,7 @@ status_text() {
     echo "Would print:   $(auto_tier) flush now"
     notify_on && echo "Notifications: on" || echo "Notifications: off"
     echo "Heads-up lead: $(get_lead)s"
-    lines_on && echo "Note paper:    ruled lines below the strip" || echo "Note paper:    off (blank below the strip)"
+    echo "Note paper:    $(notepaper_summary)"
     autoupdate_on && echo "Auto-update:   on (daily, verified)" || echo "Auto-update:   off (manual: pkeep update)"
     echo "Version:       $VERSION"
 }
@@ -271,7 +286,18 @@ _draw_body() {
     local agent printer; printer=$(printers_summary)
     is_loaded && agent="${GRN}● ON${R}" || agent="${DIM}○ OFF${R}"
 
-    if [ "$SCREEN" = printers ]; then
+    if [ "$SCREEN" = notepaper ]; then
+        printf '\n  %s %s\n' "${BLD}Printer Keep-Alive${R}" "${DIM}· Note paper${R}"
+        printf '  %s\n' "$SEP"
+        row 0 "Style              $(get_notestyle)"
+        row 1 "Line spacing       $(get_notespacing) mm"
+        printf '  %s\n' "$SEP"
+        row 2 "← Back to settings"
+        printf '  %s\n' "$SEP"
+        printf '  %s\n' "${DIM}Style: off · lines · grid · dots. Fills the page below the test strip.${R}"
+        printf '  %s\n' "${GRN}${MSG}${R}"
+        printf '\n  %s\n' "${DIM}↑/↓ move · enter change · esc back · q quit${R}"
+    elif [ "$SCREEN" = printers ]; then
         printf '\n  %s %s\n' "${BLD}Printer Keep-Alive${R}" "${DIM}· Choose printers${R}"
         printf '  %s\n' "$SEP"
         if [ "${#AVAIL[@]}" -eq 0 ]; then
@@ -299,7 +325,7 @@ _draw_body() {
         row 1 "Printers ▸         $plabel"
         row 2 "Schedule           every $(fmt_days "$(get_interval)")"
         row 3 "Heads-up lead      $(get_lead)s"
-        row 4 "Lined note paper   $(lines_on && echo ON || echo OFF)"
+        row 4 "Note paper ▸       $(notepaper_summary)"
         row 5 "Auto-update        $(autoupdate_on && echo ON || echo OFF)"
         printf '  %s\n' "$SEP"
         row 6 "← Back to menu"
@@ -391,17 +417,24 @@ ui() {
         local key; key=$(read_key) || break
         local max
         case "$SCREEN" in
-            settings) max=$SET_MAX;;
-            printers) max=${#AVAIL[@]};;   # 0..N-1 printers, N = "Done"
-            *)        max=$MAIN_MAX;;
+            settings)  max=$SET_MAX;;
+            printers)  max=${#AVAIL[@]};;   # 0..N-1 printers, N = "Done"
+            notepaper) max=2;;
+            *)         max=$MAIN_MAX;;
         esac
         case "$key" in
             up)   focus=$(( focus>0 ? focus-1 : max ));;
             down) focus=$(( focus<max ? focus+1 : 0 ));;
             q|Q)  break;;
-            esc)  case "$SCREEN" in settings) SCREEN=main; focus=0; MSG="";; printers) SCREEN=settings; focus=1; MSG="";; esac;;
+            esc)  case "$SCREEN" in settings) SCREEN=main; focus=0; MSG="";; printers|notepaper) SCREEN=settings; focus=$([ "$SCREEN" = printers ] && echo 1 || echo 4); MSG="";; esac;;
             ''|$'\n')
-                if [ "$SCREEN" = printers ]; then
+                if [ "$SCREEN" = notepaper ]; then
+                    case "$focus" in
+                        0) cycle_notestyle; MSG="Style: $(get_notestyle)";;
+                        1) local sp; sp=$(prompt_line "Line spacing in mm (4-30, now $(get_notespacing)): "); set_notespacing "$sp" && MSG="Spacing set to ${sp}mm" || MSG="Unchanged (4-30 only)";;
+                        2) SCREEN=settings; focus=4; MSG="";;
+                    esac
+                elif [ "$SCREEN" = printers ]; then
                     if [ "$focus" -ge "${#AVAIL[@]}" ]; then SCREEN=settings; focus=1; MSG="$(sel_count) printer(s) selected"
                     else toggle_printer "${AVAIL[$focus]}"; fi
                 elif [ "$SCREEN" = settings ]; then
@@ -410,7 +443,7 @@ ui() {
                         1) open_printers;;
                         2) local d; d=$(prompt_line "Schedule interval in days (now $(fmt_days "$(get_interval)")): "); set_interval_days "$d" && MSG="Schedule set to every ${d}d" || MSG="Unchanged";;
                         3) local s; s=$(prompt_line "Heads-up lead in seconds (now $(get_lead)s): "); set_lead_secs "$s" && MSG="Lead set to ${s}s" || MSG="Unchanged";;
-                        4) if lines_on; then rm -f "$LINES_FLAG"; MSG="Note paper OFF (blank below)"; else touch "$LINES_FLAG"; MSG="Note paper ON (ruled lines below)"; fi;;
+                        4) SCREEN=notepaper; focus=0; MSG="";;
                         5) if autoupdate_on; then rm -f "$AUTOUPDATE_FLAG"; MSG="Auto-update OFF"; else touch "$AUTOUPDATE_FLAG"; MSG="Auto-update ON (checks daily)"; fi;;
                         6) SCREEN=main; focus=0; MSG="";;
                     esac
@@ -451,8 +484,9 @@ show_help() {
   the printer waking. Every print is logged (see History / log).
 
   The test strip runs across the top, leaving the page below free. Turn on
-  Settings ▸ Lined note paper to fill that space with ruled lines so the sheet
-  doubles as note paper (CLI: 'pkeep lines on|off').
+  Settings ▸ Note paper to fill that space — choose a style (lines / grid /
+  dots) and line spacing so the sheet doubles as note paper. CLI:
+  'pkeep notepaper off|lines|grid|dots', 'pkeep notespacing <mm>'.
 
   Have more than one printer? Settings ▸ Printers lets you tick several — the
   keep-alive then runs on every selected printer each cycle.
@@ -490,7 +524,9 @@ case "${1:-}" in
         esac;;
     interval)  if [ -n "${2:-}" ]; then set_interval_days "$2" && echo "Schedule set to every ${2}d" || echo "Invalid"; else fmt_days "$(get_interval)"; fi;;
     lead)      if [ -n "${2:-}" ]; then set_lead_secs "$2" && echo "Lead set to ${2}s" || echo "Invalid"; else echo "$(get_lead)s"; fi;;
-    lines)     case "${2:-}" in on) touch "$LINES_FLAG"; echo "Note paper ON";; off) rm -f "$LINES_FLAG"; echo "Note paper OFF";; *) lines_on && echo on || echo off;; esac;;
+    lines)     case "${2:-}" in on) set_notestyle lines; echo "Note paper: lines";; off) set_notestyle off; echo "Note paper: off";; *) lines_on && echo on || echo off;; esac;;
+    notepaper) if [ -n "${2:-}" ]; then set_notestyle "$2" && echo "Note paper: $2" || echo "Invalid (off|lines|grid|dots)"; else get_notestyle; fi;;
+    notespacing) if [ -n "${2:-}" ]; then set_notespacing "$2" && echo "Spacing set to ${2}mm" || echo "Invalid (4-30 mm)"; else echo "$(get_notespacing)mm"; fi;;
     help|-h|--help) show_help;;
     version|--version) echo "pkeep $VERSION";;
     *) echo "unknown command: $1" >&2; echo "try: pkeep help" >&2; exit 2;;

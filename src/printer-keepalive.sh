@@ -35,7 +35,9 @@ PRINTER_FILE="$SCRIPTS/printer_keepalive.printer"     # selected printers, one n
 INTERVAL_FILE="$SCRIPTS/printer_keepalive.interval"   # schedule seconds
 LEAD_FILE="$SCRIPTS/printer_keepalive.lead"           # heads-up lead seconds
 NONOTIFY_FLAG="$SCRIPTS/printer_keepalive.nonotify"   # presence = notifications OFF
-LINES_FLAG="$SCRIPTS/printer_keepalive.lines"         # presence = ruled note paper below
+LINES_FLAG="$SCRIPTS/printer_keepalive.lines"         # legacy on/off flag (pre-style)
+NOTESTYLE_FILE="$SCRIPTS/printer_keepalive.notestyle" # off | lines | grid | dots
+NOTESPACING_FILE="$SCRIPTS/printer_keepalive.notespacing"  # rule spacing in mm
 LASTPRINT_FILE="$SCRIPTS/printer_keepalive.lastprint" # epoch of last good print
 HISTORY_FILE="$SCRIPTS/printer_keepalive.history"     # TSV: epoch ISO tier days copies printer job
 LOG="$HOME/Library/Logs/printer-keepalive.log"
@@ -69,7 +71,18 @@ get_last() {
     case "$v" in ''|*[!0-9]*) echo 0 ;; *) echo "$v" ;; esac
 }
 notify_on() { [ ! -e "$NONOTIFY_FLAG" ]; }
-lines_on()  { [ -e "$LINES_FLAG" ]; }   # fill the space below the test strip with ruled lines
+# note-paper style below the strip: off | lines | grid | dots (legacy LINES_FLAG = lines)
+get_notestyle() {
+    local v=""; [ -r "$NOTESTYLE_FILE" ] && v=$(trim < "$NOTESTYLE_FILE")
+    case "$v" in lines|grid|dots|off) echo "$v"; return;; esac
+    [ -e "$LINES_FLAG" ] && { echo lines; return; }
+    echo off
+}
+get_notespacing() {   # rule spacing in mm (default 8)
+    local v=""; [ -r "$NOTESPACING_FILE" ] && v=$(trim < "$NOTESPACING_FILE")
+    case "$v" in ''|*[!0-9]*) echo 8 ;; *) echo "$v" ;; esac
+}
+lines_on()  { [ "$(get_notestyle)" != off ]; }
 
 # post a notification via the applet (env-var payload, dsort's playbook). Silent
 # if muted or the applet isn't installed yet.
@@ -110,17 +123,22 @@ decide_tier() {
 # The test strip (all ink channels) runs across the top of the page so the area
 # below is free; with ruled-paper mode on, that area becomes lined note paper.
 build_pdf() {
-    local tier="$1" subtitle="$2" pdf stub ln
+    local tier="$1" subtitle="$2" pdf stub style sp_mm sp_pts
     stub="$(mktemp -t pkeepalive)"; pdf="${stub}.pdf"; mv "$stub" "$pdf"
     [ -z "$PYTHON" ] && { rm -f "$pdf"; echo "ERROR: python3 not found" >&2; return 1; }
-    ln=$(lines_on && echo 1 || echo 0)
-    "$PYTHON" - "$pdf" "$tier" "$ln" "$subtitle" <<'PY'
+    style=$(get_notestyle); sp_mm=$(get_notespacing)
+    sp_pts=$(awk "BEGIN{printf \"%.2f\", $sp_mm * 72 / 25.4}")   # mm -> points
+    "$PYTHON" - "$pdf" "$tier" "$style" "$sp_pts" "$subtitle" <<'PY'
 import sys
 out  = sys.argv[1]
 tier = sys.argv[2] if len(sys.argv) > 2 else "light"
-ruled = (sys.argv[3] == "1") if len(sys.argv) > 3 else False
-subtitle = sys.argv[4] if len(sys.argv) > 4 else ""
+style = sys.argv[3] if len(sys.argv) > 3 else "off"
+try: spacing = float(sys.argv[4])
+except (IndexError, ValueError): spacing = 22.7
+subtitle = sys.argv[5] if len(sys.argv) > 5 else ""
 if tier not in ("light", "medium", "heavy"): tier = "light"
+if style not in ("lines", "grid", "dots"): style = "off"
+if spacing < 8: spacing = 8        # sane floor so we never emit thousands of rules
 
 W, H = 595, 842                 # A4 points
 ML, MR = 54, 54                 # left/right margins
@@ -145,7 +163,7 @@ def line(x1, y1, x2, y2, w, c, m, ye, k):
 
 ops = []
 # header: title (bold, tracked) + subtitle (muted)
-ops.append(text(ML, 802, 13, 0.82, "NOZZLE KEEP-ALIVE", font="F2", tc=1.6))
+ops.append(text(ML, 802, 13, 0.82, "PRINTER KEEP ALIVE", font="F2", tc=1.6))
 sub = subtitle.strip()
 sub = (sub + "  -  " if sub else "") + f"{tier} flush"
 ops.append(text(ML, 788, 8, 0.45, sub))
@@ -163,18 +181,40 @@ for c, m, ye, k, label in inks:
 rule_y = strip_bottom - 16
 ops.append(line(ML, rule_y, RIGHT, rule_y, 0.6, 0, 0, 0, 0.25))
 
-# ruled note paper below (optional)
-if ruled:
-    BM = 58                       # bottom margin
-    LS = 26                       # line spacing
+# note paper below (optional): lines / grid / dots, edge to edge, down to the
+# bottom of the page (the printer's own unprintable margin trims the extremes).
+if style != "off":
+    BM = 16                       # extend nearly to the bottom edge
     notes_top = rule_y - 30
+    GK = 0.14                     # rule/dot grey (CMYK K)
     ops.append(text(ML, notes_top + 12, 7, 0.32, "Notes", font="F2"))
-    yy = notes_top
-    while yy > BM:
-        ops.append(line(ML, yy, RIGHT, yy, 0.5, 0, 0, 0, 0.14))   # faint grey rule
-        yy -= LS
-    # soft margin rule (muted red), like classic ruled paper
-    ops.append(line(ML + 30, notes_top + 6, ML + 30, BM, 0.7, 0, 0.30, 0.22, 0))
+    # horizontal rules (lines + grid)
+    if style in ("lines", "grid"):
+        yy = notes_top
+        while yy > BM:
+            ops.append(line(0, yy, W, yy, 0.5, 0, 0, 0, GK))
+            yy -= spacing
+    # vertical rules (grid only), centred so the columns sit symmetrically
+    if style == "grid":
+        n = int(W / spacing)
+        x0 = (W - n * spacing) / 2.0
+        xx = x0
+        while xx < W:
+            if xx > 0:
+                ops.append(line(xx, notes_top, xx, BM, 0.5, 0, 0, 0, GK))
+            xx += spacing
+    # dot grid: a small dot at each intersection
+    if style == "dots":
+        n = int(W / spacing)
+        x0 = (W - n * spacing) / 2.0
+        yy = notes_top
+        while yy > BM:
+            xx = x0
+            while xx < W:
+                if xx > 0:
+                    ops.append(rect(xx - 0.6, yy - 0.6, 1.2, 1.2, 0, 0, 0, 0.45))
+                xx += spacing
+            yy -= spacing
 
 # subtle footer so the page is identifiable even after it's written on
 ops.append(text(ML, 40, 6.5, 0.35, "Printer Keep-Alive  ·  inkjet nozzle maintenance"))
@@ -187,8 +227,8 @@ objs = [
     (f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {W} {H}] "
      f"/Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>").encode("latin-1"),
     b"<< /Length %d >>\nstream\n" % len(content) + content + b"endstream",
-    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
 ]
 buf = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"
 offs = []
@@ -218,6 +258,7 @@ case "$TIER" in light|medium|heavy) ;; *) TIER=$(decide_tier);; esac
 
 DAYS=$(days_since)
 TS="$(date '+%Y-%m-%d %H:%M:%S')"
+HOST="$(scutil --get ComputerName 2>/dev/null || hostname -s 2>/dev/null || hostname)"
 
 # read the selected printers into an array (bash 3.2: no mapfile)
 PRINTERS=()
@@ -235,7 +276,7 @@ esac
 
 # --- dry run: build + open, no printing, no state change -------------------
 if [ "$DRY" = 1 ]; then
-    PDF=$(build_pdf "$TIER" "$TS  -  $since  -  dry run")
+    PDF=$(build_pdf "$TIER" "$TS  ·  $since  ·  $HOST  ·  dry run")
     echo "[$TS] dry run ($TIER) - $PDF" | tee -a "$LOG"
     open "$PDF" 2>/dev/null || true
     exit 0
@@ -256,7 +297,7 @@ NOW=$(date +%s); OK=0; FAILED=""
 
 # print to every selected printer; one history row per printer
 for P in "${PRINTERS[@]}"; do
-    PDF=$(build_pdf "$TIER" "$TS  -  $since  -  printer: $P")
+    PDF=$(build_pdf "$TIER" "$TS  ·  $since  ·  $HOST  ·  $P")
     if lp -d "$P" -n "$COPIES" -o media=A4 "$PDF" >/dev/null 2>>"$LOG"; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$NOW" "$TS" "$TIER" "$DAYS" "$COPIES" "$P" >> "$HISTORY_FILE"
         OK=$((OK+1))
