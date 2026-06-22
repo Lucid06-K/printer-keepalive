@@ -9,7 +9,8 @@
 #   pkeep on|off            enable/disable the scheduled keep-alive
 #   pkeep status            one-shot text status
 #   pkeep run [tier]        print now (light|medium|heavy; default auto)
-#   pkeep preview [tier]    build + open the page without printing
+#   pkeep preview [tier]    build + open the page PDF without printing
+#   pkeep render            render the page to a PNG (in ~/Downloads) and open it
 #   pkeep log [n]           last n history lines (default 15)
 #   pkeep notify on|off     toggle the heads-up notification
 #   pkeep printer           list selected printers
@@ -60,7 +61,7 @@ REPO_RAW="https://raw.githubusercontent.com/Lucid06-K/printer-keepalive/main"
 
 DEFAULT_INTERVAL=1209600
 DEFAULT_LEAD=8
-VERSION="1.12.0"
+VERSION="1.13.0"
 
 # Public key for verifying the update manifest's signature. The matching private
 # key is held OFFLINE by the maintainer (see SIGNING.md) and is never in the repo.
@@ -432,6 +433,20 @@ ink_cached() {
     [ -r "$cf" ] && cat "$cf"
 }
 
+# build the current page and rasterise it to a real PNG, then open it.
+# echoes the PNG path on success; rc 2 = opened the PDF instead (no sips), rc 1 = failed.
+render_to_png() {
+    local pdf out dir
+    pdf=$("$WORKER" --build 2>/dev/null)
+    [ -s "$pdf" ] || return 1
+    dir="$HOME/Downloads"; [ -d "$dir" ] || dir="${TMPDIR:-/tmp}"
+    out="$dir/printer-dont-die-preview.png"
+    if command -v sips >/dev/null 2>&1 && sips -s format png "$pdf" --out "$out" >/dev/null 2>&1; then
+        rm -f "$pdf"; open "$out" 2>/dev/null; printf '%s\n' "$out"; return 0
+    fi
+    open "$pdf" 2>/dev/null; return 2   # fall back to opening the PDF (Preview rasterises it)
+}
+
 # a scaled ASCII mock-up of the printed page, reflecting the current settings.
 preview_page() {
     local W=48 pad="   " style tier ink mode c m y k dash blank i yy
@@ -479,9 +494,15 @@ preview_page() {
         printf '%s|%s|\n' "$pad" "$yy"
     done
     printf '%s+%s+\n' "$pad" "$dash"
-    printf '\n  %sp = open the full PDF   ·   any key = back%s' "$DIM" "$R"
+    printf '\n  %sr = render to PNG   ·   p = open full PDF   ·   any key = back%s' "$DIM" "$R"
     local key; key=$(read_key)
-    [ "$key" = p ] || [ "$key" = P ] && "$WORKER" --dry >/dev/null 2>&1
+    case "$key" in
+        r|R) local o rc; o=$(render_to_png); rc=$?
+             if [ "$rc" -eq 0 ]; then MSG="Rendered → ${o/#$HOME/~}"
+             elif [ "$rc" -eq 2 ]; then MSG="Opened PDF (sips unavailable)"
+             else MSG="Render failed"; fi;;
+        p|P) "$WORKER" --dry >/dev/null 2>&1; MSG="Opened full PDF";;
+    esac
 }
 
 cleanup() { stty "$_stty" 2>/dev/null; printf '\033[?25h\033[2J\033[H'; }
@@ -603,6 +624,7 @@ case "${1:-}" in
     off)       agent_off; echo "Scheduled keep-alive disabled.";;
     run)       "$WORKER" ${2:+--tier "$2"};;
     preview)   "$WORKER" --dry ${2:+"$2"};;
+    render)    o=$(render_to_png); rc=$?; [ "$rc" -eq 0 ] && echo "Rendered: $o" || { [ "$rc" -eq 2 ] && echo "Opened PDF (sips unavailable)" || echo "Render failed"; };;
     log)       n="${2:-15}"; [ -s "$HISTORY_FILE" ] && tail -n "$n" "$HISTORY_FILE" | awk -F'\t' '{g=($4<0?"first":"gap "$4"d"); printf "%s  %-7s %-8s x%s  %s\n",$2,$3,g,$5,$6}' || echo "(no history yet)";;
     notify)    case "${2:-}" in on) rm -f "$NONOTIFY_FLAG"; echo "Notifications ON";; off) touch "$NONOTIFY_FLAG"; echo "Notifications OFF";; *) notify_on && echo on || echo off;; esac;;
     printer|printers)

@@ -431,13 +431,14 @@ PY
 
 # --- main ------------------------------------------------------------------
 mkdir -p "$SCRIPTS" "$(dirname "$LOG")"
-FORCE_TIER=""; DRY=0; ARTSHEET=0
+FORCE_TIER=""; DRY=0; ARTSHEET=0; BUILD=0
 case "${1:-}" in
     --dry)       DRY=1; FORCE_TIER="${2:-}";;
+    --build)     BUILD=1; FORCE_TIER="${2:-}";;   # build the page PDF, print its path, no open/print
     --tier)      FORCE_TIER="${2:-}";;
     --art-sheet) ARTSHEET=1;;
     "")          ;;
-    *)           echo "usage: $(basename "$0") [--tier light|medium|heavy] [--dry [tier]] [--art-sheet]" >&2; exit 2;;
+    *)           echo "usage: $(basename "$0") [--tier light|medium|heavy] [--dry [tier]] [--build] [--art-sheet]" >&2; exit 2;;
 esac
 
 # --- ASCII-art contact sheet: print all the art on one page, then exit -------
@@ -481,6 +482,12 @@ if [ "$DRY" = 1 ]; then
     PDF=$(build_pdf "$TIER" "$TS  ·  $since  ·  $HOST  ·  dry run" "$(ink_report "${PRINTERS[0]:-}")" "$ADRY" page)
     echo "[$TS] dry run ($TIER) - $PDF" | tee -a "$LOG"
     open "$PDF" 2>/dev/null || true
+    exit 0
+fi
+
+# --- build only: emit the page PDF path for a previewer/renderer, then exit --
+if [ "$BUILD" = 1 ]; then
+    build_pdf "$TIER" "$TS  ·  $since  ·  $HOST  ·  preview" "$(ink_report "${PRINTERS[0]:-}")" "$ADRY" page
     exit 0
 fi
 
