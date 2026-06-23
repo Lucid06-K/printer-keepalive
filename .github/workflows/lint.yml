@@ -18,4 +18,4 @@ jobs:
       - name: ShellCheck
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
-          shellcheck -S warning src/printer-keepalive.sh src/pkeep install.sh uninstall.sh
+          shellcheck -S warning src/printer-keepalive.sh src/pkeep install.sh uninstall.sh release.sh

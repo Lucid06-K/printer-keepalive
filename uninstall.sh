@@ -17,7 +17,8 @@ ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
 rm -f "$PLIST"; ok "Removed launch agent"
 
-rm -f "$SCRIPTS/printer-keepalive.sh" "$SCRIPTS/pkeep"
+rm -f "$SCRIPTS/printer-keepalive.sh" "$SCRIPTS/pkeep" \
+      "$SCRIPTS/printer-keepalive.sh.bak" "$SCRIPTS/pkeep.bak"
 rm -rf "$SCRIPTS/PrinterKeepaliveNotifier.app"
 ok "Removed scripts and notifier app"
 
