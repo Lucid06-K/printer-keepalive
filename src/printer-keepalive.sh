@@ -394,19 +394,21 @@ if layout != "classic":
     def fit(s, size, x0):          # truncate so a line never runs into the strip
         n = int((strip_left - 6 - x0) / (size * 0.5))
         return s if len(s) <= n else s[:max(0, n - 1)]
-    ops.append(text(ML, 794, 12, 0.82, "PRINTER DON'T DIE PLEASE!!", font="F2", tc=1.2))
-    ops.append(text(TX, 778, 7, 0.45, fit(line1, 7, TX)))
-    ops.append(text(TX, 764, 7.5, 0.45, fit(host_s, 7.5, TX)))
-    ops.append(text(TX, 750, 6.5, 0.50, fit(REPO, 6.5, TX)))
+    # lift the whole header group so the title's K underline TOP edge lines up with
+    # the top of the C (cyan) bar. Base baselines 794/778/764/750, underlines -2pt.
+    HY = bar_span["C"][0] - 792.65
+    ops.append(text(ML, 794 + HY, 12, 0.82, "PRINTER DON'T DIE PLEASE!!", font="F2", tc=1.2))
+    ops.append(text(TX, 778 + HY, 7, 0.45, fit(line1, 7, TX)))
+    ops.append(text(TX, 764 + HY, 7.5, 0.45, fit(host_s, 7.5, TX)))
+    ops.append(text(TX, 750 + HY, 6.5, 0.50, fit(REPO, 6.5, TX)))
     xT = strip_left - 34           # where the thin underline ends and the taper begins
-    # underline ~2pt below each text baseline (794/778/764/750) so the text sits on it
-    for uy, xL, lab in [(792, ML, "K"), (776, TX, "Y"), (762, TX, "M"), (748, TX, "C")]:
+    for uy, xL, lab in [(792 + HY, ML, "K"), (776 + HY, TX, "Y"), (762 + HY, TX, "M"), (748 + HY, TX, "C")]:
         bt, bb = bar_span[lab]
         cc = {"C": (1,0,0,0), "M": (0,1,0,0), "Y": (0,0,1,0), "K": (0,0,0,1)}[lab]
         ops.append(ribbon(xL, xT, strip_left, uy, bt, bb, 1.3, cc[0], cc[1], cc[2], cc[3]))
     # rotating art, tucked into the empty inner-left margin beside the info lines
     if 0 <= art_idx < len(ART):
-        art_block(ART[art_idx], ML, 776, 5.5, 6.5)
+        art_block(ART[art_idx], ML, 776 + HY, 5.5, 6.5)
     # heavy's tall strip leaves the left side empty — fill it with note rules too
     if tier == "heavy":
         note_split_x = strip_left
