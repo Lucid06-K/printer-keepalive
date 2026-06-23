@@ -416,9 +416,9 @@ if layout != "classic":
                "M": bar_span["Y"][1] + TUL / 2,   # M underline base = Y-bar bottom
                "C": bar_span["K"][1] + TUL / 2}   # C underline base = K-bar bottom
     ops.append(text(ML, uly["K"] + 2, 12, 0.82, "PRINTER DON'T DIE PLEASE!!", font="F2", tc=1.2))
-    ops.append(text(TX, uly["Y"] + 2, 7, 0.45, fit(line1, 7, TX)))
-    ops.append(text(TX, uly["M"] + 2, 7.5, 0.45, fit(host_s, 7.5, TX)))
-    ops.append(text(TX, uly["C"] + 2, 6.5, 0.50, fit(REPO, 6.5, TX)))
+    ops.append(text(TX, uly["Y"] + 5, 7, 0.45, fit(line1, 7, TX)))
+    ops.append(text(TX, uly["M"] + 5, 7.5, 0.45, fit(host_s, 7.5, TX)))
+    ops.append(text(TX, uly["C"] + 5, 6.5, 0.50, fit(REPO, 6.5, TX)))
     xT = strip_left - 34           # where the thin underline ends and the taper begins
     for lab, xL in [("K", ML), ("Y", TX), ("M", TX), ("C", TX)]:
         bt, bb = bar_span[lab]
@@ -426,7 +426,7 @@ if layout != "classic":
         ops.append(ribbon(xL, xT, strip_left, uly[lab], bt, bb, TUL, cc[0], cc[1], cc[2], cc[3]))
     # rotating art, tucked into the empty inner-left margin beside the info lines
     if 0 <= art_idx < len(ART):
-        art_block(ART[art_idx], ML, uly["Y"] + 2, 5.5, 6.5)
+        art_block(ART[art_idx], ML, uly["M"] + 5 + (len(ART[art_idx]) - 1) * 6.5 / 2, 5.5, 6.5)
     # heavy's tall strip leaves the left side empty — fill it with note rules too
     if tier == "heavy":
         note_split_x = strip_left
