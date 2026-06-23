@@ -399,7 +399,8 @@ if layout != "classic":
     ops.append(text(TX, 764, 7.5, 0.45, fit(host_s, 7.5, TX)))
     ops.append(text(TX, 750, 6.5, 0.50, fit(REPO, 6.5, TX)))
     xT = strip_left - 34           # where the thin underline ends and the taper begins
-    for uy, xL, lab in [(789, ML, "K"), (772, TX, "Y"), (758, TX, "M"), (744, TX, "C")]:
+    # underline ~2pt below each text baseline (794/778/764/750) so the text sits on it
+    for uy, xL, lab in [(792, ML, "K"), (776, TX, "Y"), (762, TX, "M"), (748, TX, "C")]:
         bt, bb = bar_span[lab]
         cc = {"C": (1,0,0,0), "M": (0,1,0,0), "Y": (0,0,1,0), "K": (0,0,0,1)}[lab]
         ops.append(ribbon(xL, xT, strip_left, uy, bt, bb, 1.3, cc[0], cc[1], cc[2], cc[3]))
