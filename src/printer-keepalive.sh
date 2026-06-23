@@ -321,6 +321,24 @@ ink_mode = ink_tok[0] if ink_tok else ""
 REPO = "github.com/Lucid06-K/printer-keepalive"
 note_split_x = None                # x where left/right note regions differ (heavy redesign)
 notes_left_top = None              # y where the extra left-fill note region starts
+QCOL = [(1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1)]
+
+# per-quarter ink level %. Combined: C/M/Y share the colour reading, K = black.
+def numlvl(s):
+    try: return max(0.0, min(100.0, float(s)))
+    except (TypeError, ValueError): return None
+if ink_mode == "combined":
+    _cl = numlvl(ink_tok[1] if len(ink_tok) > 1 else None)
+    _bk = numlvl(ink_tok[2] if len(ink_tok) > 2 else None)
+    qlevels = [_cl, _cl, _cl, _bk]
+elif ink_mode == "separate":
+    qlevels = [numlvl(x) for x in (list(ink_tok[1:5]) + [None] * 4)[:4]]
+else:
+    qlevels = [None] * 4
+# strip label with the channel's ink % to its right (e.g. "C  75%"); plain when unknown
+def barlabel(i, lab):
+    lv = qlevels[i]
+    return f"{lab}  {int(round(lv))}%" if lv is not None else lab
 
 # ===== top band: strip + ink-gauge divider (layout-dependent) =====
 if layout == "classic":
@@ -335,51 +353,59 @@ if layout == "classic":
         art_block(a, RIGHT - aw, 806, 6.5, 7.5)   # right-justified to the strip end
     y = 768
     strip_bottom = y
-    for c, m, ye, k, label in inks:
+    bar_span = {}
+    for i, (c, m, ye, k, label) in enumerate(inks):
         ops.append(rect(ML, y - BH, CW, BH, c, m, ye, k))
-        ops.append(text(RIGHT + 6, y - BH + (BH - 6) / 2, 6.5, 0.45, label))
+        ops.append(text(RIGHT + 6, y - BH + (BH - 6) / 2, 6.5, 0.45, barlabel(i, label)))
+        bar_span[label] = (y, y - BH)
         strip_bottom = y - BH
         y = strip_bottom - GAP
     sx, qw = ML, CW / 4.0
+    rule_y = strip_bottom - 16
 else:
     # redesign: half-width strip on the right (frees the left half for the header)
     strip_left = W / 2.0
     strip_w = RIGHT - strip_left
+    sx, qw = strip_left, strip_w / 4.0
+    # 1) bar positions (drawn later, so the ink-level connectors can sit BEHIND them)
     y = 800
     strip_bottom = y
-    bar_span = {}                  # label -> (top y, bottom y), used by the ribbons
+    bar_span = {}
+    barlist = []
     for c, m, ye, k, label in inks:
-        ops.append(rect(strip_left, y - BH, strip_w, BH, c, m, ye, k))
-        ops.append(text(RIGHT + 6, y - BH + (BH - 6) / 2, 6.5, 0.45, label))
         bar_span[label] = (y, y - BH)
+        barlist.append((c, m, ye, k, label, y - BH))
         strip_bottom = y - BH
         y = strip_bottom - GAP
-    sx, qw = strip_left, strip_w / 4.0
+    rule_y = strip_bottom - 16
+    # 2) ink-level connectors BEHIND the bars: each quarter's colour rises from the
+    # divider up to the BOTTOM of its own bar, tapering from the level width (at the
+    # divider) to the full quarter (at the bar). The bars, drawn next, cover the
+    # crossings, so each colour shows only in the gaps + the gauge band.
+    for i, lab in enumerate(("C", "M", "Y", "K")):
+        lv = qlevels[i]
+        if lv is None: continue
+        c, m, ye, k = QCOL[i]
+        qx = sx + i * qw
+        bar_bot = bar_span[lab][1]
+        fillw = max(3.0, lv / 100.0 * (qw - 2))
+        bl = qx + (qw - fillw) / 2.0; br = bl + fillw     # narrow (level) end, at the divider
+        tl, tr = qx + 1, qx + qw - 1                       # full quarter, where it meets the bar
+        my = (rule_y + bar_bot) / 2.0
+        ops.append(f"{c} {m} {ye} {k} k "
+                   f"{bl:.1f} {rule_y:.1f} m "
+                   f"{bl:.1f} {my:.1f} {tl:.1f} {my:.1f} {tl:.1f} {bar_bot:.1f} c "
+                   f"{tr:.1f} {bar_bot:.1f} l "
+                   f"{tr:.1f} {my:.1f} {br:.1f} {my:.1f} {br:.1f} {rule_y:.1f} c f")
+    # 3) the bars, on top of the connectors
+    for i, (c, m, ye, k, label, bot) in enumerate(barlist):
+        ops.append(rect(strip_left, bot, strip_w, BH, c, m, ye, k))
+        ops.append(text(RIGHT + 6, bot + (BH - 6) / 2, 6.5, 0.45, barlabel(i, label)))
 
-# divider: one rule split into four C/M/Y/K quarters, doubling as the ink gauge.
-# The level(s) print above it — a single "Colour" reading spanning C/M/Y for a
-# combined tri-colour cartridge, else one per channel. sx/qw are set per layout.
-rule_y = strip_bottom - 16
-for i, (c, m, ye, k) in enumerate([(1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1)]):
-    ops.append(line(sx + i*qw, rule_y, sx + (i+1)*qw, rule_y, 1.5, c, m, ye, k))
-
-def gauge(xc, lvl, lbl=""):
-    if lvl in ("", "-"): return
-    ops.append(ctext(xc, rule_y + 4, 7, 0.6, (lbl + " " if lbl else "") + lvl + "%"))
-
-if ink_mode == "combined":
-    gauge(sx + 1.5 * qw, ink_tok[1] if len(ink_tok) > 1 else "-", "Colour")
-    gauge(sx + 3.5 * qw, ink_tok[2] if len(ink_tok) > 2 else "-", "Black")
-    by = rule_y - 5                # a thin brace: the C/M/Y quarters share one cartridge
-    ops.append(line(sx + 4, by, sx + 3 * qw - 4, by, 0.5, 0, 0, 0, 0.30))
-    ops.append(line(sx + 4, by, sx + 4, rule_y - 2, 0.5, 0, 0, 0, 0.30))
-    ops.append(line(sx + 3 * qw - 4, by, sx + 3 * qw - 4, rule_y - 2, 0.5, 0, 0, 0, 0.30))
-elif ink_mode == "separate":
-    for i, v in enumerate(ink_tok[1:5]):
-        gauge(sx + (i + 0.5) * qw, v)
-
-if ink_mode in ("combined", "separate"):
-    ops.append(text(RIGHT + 6, rule_y - 2, 6, 0.45, "INK LEVELS"))
+# divider: one rule split into four C/M/Y/K quarters; the ink-level connectors feed
+# into it. Per-channel percentages are shown beside the C/M/Y/K bar labels instead.
+for i, (c, m, ye, k) in enumerate(QCOL):
+    ops.append(line(sx + i * qw, rule_y, sx + (i + 1) * qw, rule_y, 1.5, c, m, ye, k))
 
 # ===== redesign header: title/info/repo on the left, CMYK ribbons to the strip =====
 if layout != "classic":
